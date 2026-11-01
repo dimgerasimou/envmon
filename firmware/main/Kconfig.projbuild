@@ -1,0 +1,10 @@
+menu "envmon"
+
+	config ENVMON_SENSOR_PERIOD_S
+		int "Default sensor read period (seconds)"
+		range 2 3600
+		default 30
+		help
+		  Used until Home Assistant sets another period.
+
+endmenu

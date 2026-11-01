@@ -18,7 +18,7 @@ void app_main(void)
 	sensors_data_t data;
 
 	ESP_ERROR_CHECK(board_i2c_init());
-	ESP_ERROR_CHECK(sensors_start(2000, &queue));
+	ESP_ERROR_CHECK(sensors_start(CONFIG_ENVMON_SENSOR_PERIOD_S * 1000, &queue));
 
 	for (;;) {
 		xQueueReceive(queue, &data, portMAX_DELAY);

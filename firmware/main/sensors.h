@@ -1,16 +1,30 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define SENSORS_PERIOD_MIN_MS   2000        /*!< Shortest allowed read period */
+#define SENSORS_PERIOD_MAX_MS   3600000     /*!< Longest allowed read period (1 h) */
+
+/**
+ * @brief One measured quantity and the sensor that supplied it
+ */
 typedef struct {
-	bool valid;
-	float   value;
-	const char *src;
+	bool valid;             /*!< false when no sensor could supply it this cycle */
+	float value;            /*!< Measured value, unit given by the field name */
+	const char *src;        /*!< Sensor that supplied the value, e.g. "aht10" */
 } sensors_param_t;
 
+/**
+ * @brief One sample of every quantity the node can measure
+ */
 typedef struct {
 	sensors_param_t temperature_c;
 	sensors_param_t humidity_pct;
@@ -20,19 +34,44 @@ typedef struct {
 	sensors_param_t eco2_ppm;
 } sensors_data_t;
 
-esp_err_t sensors_init(void);
-
-esp_err_t sensors_read(sensors_data_t *data);
-
 /**
  * @brief Start the periodic sensor task.
  *
- * Initializes the sensors, then reads them every @p period_ms and
- * publishes the latest sample to a single-slot queue.
+ * Initializes the sensors enabled in the board config, then reads them every
+ * period and publishes the latest sample to a single-slot queue. A sensor
+ * that is missing or stops answering does not stop the task: its values are
+ * marked invalid and it is retried in the background with a growing delay.
  *
- * @param period_ms  Time between reads, in milliseconds.
- * @param ret_queue  Returned queue of sensors_data_t.
- * @return ESP_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_STATE if already
- *         started, ESP_ERR_NO_MEM, or an error from sensors_init().
+ * The board I2C bus must be initialized first.
+ *
+ * @param period_ms  Time between reads, SENSORS_PERIOD_MIN_MS to SENSORS_PERIOD_MAX_MS.
+ * @param ret_queue  Returned queue of sensors_data_t, read with xQueueReceive().
+ * @return
+ *     - ESP_OK on success
+ *     - ESP_ERR_INVALID_ARG if ret_queue is NULL or period_ms is out of range
+ *     - ESP_ERR_INVALID_STATE if already started
+ *     - ESP_ERR_NOT_SUPPORTED if the board config enables no sensor
+ *     - ESP_ERR_NO_MEM if the queue or task could not be created
  */
 esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue);
+
+/**
+ * @brief Change the read period.
+ *
+ * Safe to call from any task. If the sensor task is running, it reads
+ * immediately and then continues with the new period.
+ *
+ * @param period_ms  SENSORS_PERIOD_MIN_MS to SENSORS_PERIOD_MAX_MS.
+ * @return ESP_OK, or ESP_ERR_INVALID_ARG if out of range.
+ */
+esp_err_t sensors_set_period(uint32_t period_ms);
+
+/**
+ * @brief Current read period in milliseconds.
+ */
+uint32_t sensors_get_period(void);
+
+#ifdef __cplusplus
+}
+#endif
+

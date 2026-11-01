@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include "sensors.h"
 #include "freertos/task.h"
 #include "esp_check.h"
@@ -7,7 +8,9 @@
 #include "aht10.h"
 #include "ens160.h"
 
-#define MAX_FAILURES        3
+#define MAX_FAILURES        3                       /* consecutive read errors before re-init */
+#define RETRY_MIN           pdMS_TO_TICKS(5000)     /* first re-init delay */
+#define RETRY_MAX           pdMS_TO_TICKS(300000)   /* re-init delay cap (5 min) */
 #define SENSORS_TASK_STACK  4096
 #define SENSORS_TASK_PRIO   5
 
@@ -15,75 +18,66 @@ static const char *TAG = "sensors";
 
 static QueueHandle_t s_queue;
 static TaskHandle_t s_task;
-static uint32_t s_period_ms;
+static _Atomic uint32_t s_period_ms = 30000;
 
-#if CONFIG_BOARD_HAS_BMP280
-static bmp280_handle_t bmp280 = NULL;
-#endif
+/*
+ * Health bookkeeping shared by every sensor
+ */
 
-#if CONFIG_BOARD_HAS_AHT10
-static aht10_handle_t aht10 = NULL;
-#endif
+typedef struct {
+	const char *name;
+	uint8_t failures;       /* consecutive read errors */
+	TickType_t backoff;     /* 0 = healthy, else wait this long between init attempts */
+	TickType_t last_try;    /* tick of the last init attempt */
+} sensor_state_t;
 
-#if CONFIG_BOARD_HAS_ENS160
-static ens160_handle_t ens160 = NULL;
-#endif
-
-static esp_err_t init_bmp280(void)
+/* Whether a sensor that is not initialized should be tried now. */
+static bool retry_due(sensor_state_t *s)
 {
-#if CONFIG_BOARD_HAS_BMP280
-	bmp280_config_t bmp280_cfg = BMP280_DEFAULT_CONFIG();
+	TickType_t now = xTaskGetTickCount();
 
-	bmp280_cfg.addr = CONFIG_BOARD_BMP280_ADDR;
-	bmp280_cfg.filter = BMP280_FILTER_4;
-
-	esp_err_t err = bmp280_init(board_i2c_bus(), &bmp280_cfg, &bmp280);
-
-	if (err == ESP_OK)
-		ESP_LOGI(TAG, "BMP280 ready");
-	else
-		ESP_LOGE(TAG, "BMP280 unavailable: %s", esp_err_to_name(err));
-#endif
-
-	return ESP_OK;
+	if (s->backoff && now - s->last_try < s->backoff)
+		return false;
+	s->last_try = now;
+	return true;
 }
 
-static esp_err_t init_aht10(void)
+/* Record the result of an init attempt. Logs an error only on the first failure. */
+static esp_err_t init_done(sensor_state_t *s, esp_err_t err)
 {
-#if CONFIG_BOARD_HAS_AHT10
-	aht10_config_t aht10_cfg = AHT10_DEFAULT_CONFIG();
+	if (err == ESP_OK) {
+		ESP_LOGI(TAG, "%s ready", s->name);
+		s->failures = 0;
+		s->backoff = 0;
+		return ESP_OK;
+	}
 
-	aht10_cfg.addr = CONFIG_BOARD_AHT10_ADDR;
-
-	esp_err_t err = aht10_init(board_i2c_bus(), &aht10_cfg, &aht10);
-
-	if (err == ESP_OK)
-		ESP_LOGI(TAG, "AHT10 ready");
-	else
-		ESP_LOGE(TAG, "AHT10 unavailable: %s", esp_err_to_name(err));
-#endif
-
-	return ESP_OK;
+	if (!s->backoff) {
+		ESP_LOGE(TAG, "%s unavailable: %s, retrying in background",
+		         s->name, esp_err_to_name(err));
+		s->backoff = RETRY_MIN;
+	} else {
+		ESP_LOGD(TAG, "%s still unavailable: %s", s->name, esp_err_to_name(err));
+		s->backoff = s->backoff >= RETRY_MAX / 2 ? RETRY_MAX : s->backoff * 2;
+	}
+	return err;
 }
 
-static esp_err_t init_ens160(void)
+/* Record a read error. Returns true when the driver should be deleted and re-initialized. */
+static bool read_failed(sensor_state_t *s, esp_err_t err)
 {
-#if CONFIG_BOARD_HAS_ENS160
-	ens160_config_t ens160_cfg = ENS160_DEFAULT_CONFIG();
+	ESP_LOGW(TAG, "%s read failed (%u/%u): %s",
+	         s->name, s->failures + 1, MAX_FAILURES, esp_err_to_name(err));
+	if (++s->failures < MAX_FAILURES)
+		return false;
 
-	ens160_cfg.addr = CONFIG_BOARD_ENS160_ADDR;
-
-	esp_err_t err = ens160_init(board_i2c_bus(), &ens160_cfg, &ens160);
-
-	if (err == ESP_OK)
-		ESP_LOGI(TAG, "ENS160 ready");
-	else
-		ESP_LOGE(TAG, "ENS160 unavailable: %s", esp_err_to_name(err));
-#endif
-
-	return ESP_OK;
+	ESP_LOGE(TAG, "%s lost, re-initializing", s->name);
+	s->failures = 0;
+	s->backoff = 0;         /* try again on the next cycle */
+	return true;
 }
 
+/* Fill a value unless a higher-priority sensor already did this cycle. */
 static void set_value(sensors_param_t *v, float value, const char *src)
 {
 	if (v->valid)
@@ -93,138 +87,219 @@ static void set_value(sensors_param_t *v, float value, const char *src)
 	v->valid = true;
 }
 
-static void read_bmp280(sensors_data_t *data)
+/*
+ * Sensors. Each one: open (init with board config), read (with re-init on errors).
+ * Priority between sensors that measure the same quantity is the call order
+ * in read_all().
+ */
+
+#if CONFIG_BOARD_HAS_AHT10
+static aht10_handle_t s_aht10;
+static sensor_state_t s_aht10_st = { .name = "AHT10" };
+
+static esp_err_t open_aht10(void)
 {
-#if CONFIG_BOARD_HAS_BMP280
-	static uint8_t failures;
-	float t, p;
+	aht10_config_t cfg = AHT10_DEFAULT_CONFIG();
 
-	if (!bmp280 && init_bmp280() != ESP_OK)
-		return;
-
-	esp_err_t err = bmp280_read(bmp280, &t, &p);
-
-	if (err != ESP_OK) {
-		ESP_LOGW(TAG, "BMP280 read failed: %s", esp_err_to_name(err));
-		if (++failures >= MAX_FAILURES) {
-			bmp280_delete(bmp280);
-			bmp280 = NULL;
-			failures = 0;
-		}
-		return;
-	}
-	failures = 0;
-	set_value(&data->temperature_c, t, "bmp280");
-	set_value(&data->pressure_hpa, p / 100.0f, "bmp280");
-#endif
+	cfg.addr = CONFIG_BOARD_AHT10_ADDR;
+	return init_done(&s_aht10_st, aht10_init(board_i2c_bus(), &cfg, &s_aht10));
 }
 
 static void read_aht10(sensors_data_t *data)
 {
-#if CONFIG_BOARD_HAS_AHT10
-	static uint8_t failures;
 	float t, rh;
 
-	if (!aht10 && init_aht10() != ESP_OK)
+	if (!s_aht10 && (!retry_due(&s_aht10_st) || open_aht10() != ESP_OK))
 		return;
 
-	esp_err_t err = aht10_read(aht10, &t, &rh);
+	esp_err_t err = aht10_read(s_aht10, &t, &rh);
 
 	if (err != ESP_OK) {
-		ESP_LOGW(TAG, "AHT10 read failed: %s", esp_err_to_name(err));
-		if (++failures >= MAX_FAILURES) {
-			aht10_delete(aht10);
-			aht10 = NULL;
-			failures = 0;
+		if (read_failed(&s_aht10_st, err)) {
+			aht10_delete(s_aht10);
+			s_aht10 = NULL;
 		}
 		return;
 	}
-	failures = 0;
+	s_aht10_st.failures = 0;
 	set_value(&data->temperature_c, t, "aht10");
 	set_value(&data->humidity_pct, rh, "aht10");
+}
 #endif
+
+#if CONFIG_BOARD_HAS_BMP280
+static bmp280_handle_t s_bmp280;
+static sensor_state_t s_bmp280_st = { .name = "BMP280" };
+
+static esp_err_t open_bmp280(void)
+{
+	bmp280_config_t cfg = BMP280_DEFAULT_CONFIG();
+
+	cfg.addr = CONFIG_BOARD_BMP280_ADDR;
+	cfg.filter = BMP280_FILTER_4;
+	return init_done(&s_bmp280_st, bmp280_init(board_i2c_bus(), &cfg, &s_bmp280));
+}
+
+static void read_bmp280(sensors_data_t *data)
+{
+	float t, p;
+
+	if (!s_bmp280 && (!retry_due(&s_bmp280_st) || open_bmp280() != ESP_OK))
+		return;
+
+	esp_err_t err = bmp280_read(s_bmp280, &t, &p);
+
+	if (err != ESP_OK) {
+		if (read_failed(&s_bmp280_st, err)) {
+			bmp280_delete(s_bmp280);
+			s_bmp280 = NULL;
+		}
+		return;
+	}
+	s_bmp280_st.failures = 0;
+	set_value(&data->temperature_c, t, "bmp280");
+	set_value(&data->pressure_hpa, p / 100.0f, "bmp280");
+}
+#endif
+
+#if CONFIG_BOARD_HAS_ENS160
+static ens160_handle_t s_ens160;
+static sensor_state_t s_ens160_st = { .name = "ENS160" };
+
+static esp_err_t open_ens160(void)
+{
+	ens160_config_t cfg = ENS160_DEFAULT_CONFIG();
+
+	cfg.addr = CONFIG_BOARD_ENS160_ADDR;
+	return init_done(&s_ens160_st, ens160_init(board_i2c_bus(), &cfg, &s_ens160));
 }
 
 static void read_ens160(sensors_data_t *data)
 {
-#if CONFIG_BOARD_HAS_ENS160
-	static uint8_t failures;
+	static ens160_validity_t last_validity = ENS160_VALIDITY_NORMAL;
 	ens160_data_t d;
+	esp_err_t err = ESP_OK;
 
-	if (!ens160 && init_ens160() != ESP_OK)
+	if (!s_ens160 && (!retry_due(&s_ens160_st) || open_ens160() != ESP_OK))
 		return;
 
-	/* best available ambient values from the sensors read before this one */
+	/* best ambient values from the sensors read before this one */
 	if (data->temperature_c.valid && data->humidity_pct.valid)
-		ens160_set_compensation(ens160, data->temperature_c.value, data->humidity_pct.value);
-
-	esp_err_t err = ens160_read(ens160, &d);
+		err = ens160_set_compensation(s_ens160, data->temperature_c.value,
+		                              data->humidity_pct.value);
+	if (err == ESP_OK)
+		err = ens160_read(s_ens160, &d);
 
 	if (err != ESP_OK) {
-		ESP_LOGW(TAG, "ENS160 read failed: %s", esp_err_to_name(err));
-		if (++failures >= MAX_FAILURES) {
-			ens160_delete(ens160);
-			ens160 = NULL;
-			failures = 0;
+		if (read_failed(&s_ens160_st, err)) {
+			ens160_delete(s_ens160);
+			s_ens160 = NULL;
 		}
 		return;
 	}
-	failures = 0;
+	s_ens160_st.failures = 0;
 
-	if (d.validity != ENS160_VALIDITY_NORMAL) {
-		ESP_LOGI(TAG, "ENS160 warming up (validity %d)", d.validity);
-		return;
+	if (d.validity != last_validity) {
+		ESP_LOGI(TAG, "ENS160 validity %d -> %d", last_validity, d.validity);
+		last_validity = d.validity;
 	}
+	if (d.validity != ENS160_VALIDITY_NORMAL)
+		return;
+
 	set_value(&data->aqi, d.aqi, "ens160");
 	set_value(&data->tvoc_ppb, d.tvoc_ppb, "ens160");
 	set_value(&data->eco2_ppm, d.eco2_ppm, "ens160");
+}
+#endif
+
+static void open_all(void)
+{
+#if CONFIG_BOARD_HAS_AHT10
+	open_aht10();
+#endif
+#if CONFIG_BOARD_HAS_BMP280
+	open_bmp280();
+#endif
+#if CONFIG_BOARD_HAS_ENS160
+	open_ens160();
+#endif
+}
+
+/* Call order is priority order. ENS160 last: it uses the T/RH read before it. */
+static void read_all(sensors_data_t *data)
+{
+	*data = (sensors_data_t){ 0 };
+
+#if CONFIG_BOARD_HAS_AHT10
+	read_aht10(data);
+#endif
+#if CONFIG_BOARD_HAS_BMP280
+	read_bmp280(data);
+#endif
+#if CONFIG_BOARD_HAS_ENS160
+	read_ens160(data);
 #endif
 }
 
 static void sensors_task(void *arg)
 {
-	TickType_t last_wake = xTaskGetTickCount();
 	sensors_data_t data;
 
 	for (;;) {
-		if (sensors_read(&data) == ESP_OK)
-			xQueueOverwrite(s_queue, &data);
+		TickType_t start = xTaskGetTickCount();
 
+		read_all(&data);
+		xQueueOverwrite(s_queue, &data);
 		ESP_LOGD(TAG, "stack free: %u bytes", (unsigned)uxTaskGetStackHighWaterMark(NULL));
-		xTaskDelayUntil(&last_wake, pdMS_TO_TICKS(s_period_ms));
+
+		/* sleep for the rest of the period, or until sensors_set_period() wakes us */
+		TickType_t period = pdMS_TO_TICKS(atomic_load(&s_period_ms));
+		TickType_t elapsed = xTaskGetTickCount() - start;
+
+		ulTaskNotifyTake(pdTRUE, elapsed < period ? period - elapsed : 0);
 	}
 }
 
-esp_err_t sensors_init(void)
+static bool period_valid(uint32_t period_ms)
 {
-	init_bmp280();
-	init_aht10();
-	init_ens160();
-	
+	return period_ms >= SENSORS_PERIOD_MIN_MS && period_ms <= SENSORS_PERIOD_MAX_MS;
+}
+
+esp_err_t sensors_set_period(uint32_t period_ms)
+{
+	ESP_RETURN_ON_FALSE(period_valid(period_ms), ESP_ERR_INVALID_ARG, TAG,
+	                    "period %lu ms out of range", (unsigned long)period_ms);
+
+	atomic_store(&s_period_ms, period_ms);
+	ESP_LOGI(TAG, "period set to %lu ms", (unsigned long)period_ms);
+	if (s_task)
+		xTaskNotifyGive(s_task);
 	return ESP_OK;
 }
 
-esp_err_t sensors_read(sensors_data_t *data)
+uint32_t sensors_get_period(void)
 {
-	*data = (sensors_data_t){ 0 };
-
-	read_aht10(data);
-	read_bmp280(data);
-	read_ens160(data);
-
-	return ESP_OK;
+	return atomic_load(&s_period_ms);
 }
 
 esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue)
 {
-	ESP_RETURN_ON_FALSE(ret_queue && period_ms > 0, ESP_ERR_INVALID_ARG, TAG, "invalid args");
+	ESP_RETURN_ON_FALSE(ret_queue && period_valid(period_ms), ESP_ERR_INVALID_ARG, TAG,
+	                    "invalid args");
 	ESP_RETURN_ON_FALSE(!s_task, ESP_ERR_INVALID_STATE, TAG, "already started");
-	ESP_RETURN_ON_ERROR(sensors_init(), TAG, "init failed");
+
+#if !CONFIG_BOARD_HAS_AHT10 && !CONFIG_BOARD_HAS_BMP280 && !CONFIG_BOARD_HAS_ENS160
+	ESP_LOGE(TAG, "no sensor enabled in board config");
+	return ESP_ERR_NOT_SUPPORTED;
+#endif
 
 	s_queue = xQueueCreate(1, sizeof(sensors_data_t));
 	ESP_RETURN_ON_FALSE(s_queue, ESP_ERR_NO_MEM, TAG, "queue alloc failed");
 
-	s_period_ms = period_ms;
+	/* missing sensors are not fatal: they get retried from the task */
+	open_all();
+
+	atomic_store(&s_period_ms, period_ms);
 	if (xTaskCreate(sensors_task, "sensors", SENSORS_TASK_STACK, NULL,
 	                SENSORS_TASK_PRIO, &s_task) != pdPASS) {
 		vQueueDelete(s_queue);
