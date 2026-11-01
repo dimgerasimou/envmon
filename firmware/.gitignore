@@ -1,0 +1,12 @@
+/build/
+/build-*/
+
+/sdkconfig
+/sdkconfig.old
+
+/.clangd
+/.cache/
+
+/managed_components/
+
+/sdkconfig.defaults.local

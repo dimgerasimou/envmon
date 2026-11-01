@@ -1,0 +1,59 @@
+menu "Board"
+
+	menu "I2C bus"
+
+		config BOARD_I2C_SDA
+			int "SDA GPIO"
+			range 0 30
+			default 6
+			help
+			  GPIO connected to the I2C data line.
+
+		config BOARD_I2C_SCL
+			int "SCL GPIO"
+			range 0 30
+			default 7
+			help
+			  GPIO connected to the I2C clock line.
+
+	endmenu
+
+	menu "Sensors"
+
+		config BOARD_HAS_BMP280
+			bool "BMP280 (temperature, pressure)"
+			default n
+
+		config BOARD_BMP280_ADDR
+			hex "BMP280 I2C address"
+			depends on BOARD_HAS_BMP280
+			range 0x76 0x77
+			default 0x76
+			help
+			  0x76 when SDO is tied to GND, 0x77 when tied to VCC.
+
+		config BOARD_HAS_AHT10
+			bool "AHT10 (temperature, humidity)"
+			default n
+
+		config BOARD_AHT10_ADDR
+			hex "AHT10 I2C address"
+			depends on BOARD_HAS_AHT10
+			range 0x38 0x39
+			default 0x38
+			help
+			  0x38 when ADR is tied to GND, 0x39 when tied to VCC.
+
+		config BOARD_HAS_ENS160
+			bool "ENS160 (air quality: AQI, TVOC, eCO2)"
+			default n
+
+		config BOARD_ENS160_ADDR
+			hex "ENS160 I2C address"
+			depends on BOARD_HAS_ENS160
+			range 0x52 0x53
+			default 0x53
+			help
+			  0x53 with ADDR tied to VCC (most modules), 0x52 to GND.
+	endmenu
+endmenu
