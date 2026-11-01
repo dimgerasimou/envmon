@@ -4,7 +4,7 @@
 #include "board.h"
 #include "sensors.h"
 
-static const char *TAG = "app";
+static const char *TAG = "envmon";
 
 void app_main(void)
 {

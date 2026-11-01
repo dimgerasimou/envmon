@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 set(COMPONENTS main)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(monitor)
+project(envmon)
 
 # Editor support: write .clangd for this machine's toolchain (git-ignored).
 # Ask GCC for its header search path with the same libc as the build.
