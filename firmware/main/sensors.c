@@ -1,13 +1,21 @@
 #include "sensors.h"
+#include "freertos/task.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "board.h"
 #include "bmp280.h"
 #include "aht10.h"
 #include "ens160.h"
 
-#define MAX_FAILURES 3
+#define MAX_FAILURES        3
+#define SENSORS_TASK_STACK  4096
+#define SENSORS_TASK_PRIO   5
 
 static const char *TAG = "sensors";
+
+static QueueHandle_t s_queue;
+static TaskHandle_t s_task;
+static uint32_t s_period_ms;
 
 #if CONFIG_BOARD_HAS_BMP280
 static bmp280_handle_t bmp280 = NULL;
@@ -173,6 +181,20 @@ static void read_ens160(sensors_data_t *data)
 #endif
 }
 
+static void sensors_task(void *arg)
+{
+	TickType_t last_wake = xTaskGetTickCount();
+	sensors_data_t data;
+
+	for (;;) {
+		if (sensors_read(&data) == ESP_OK)
+			xQueueOverwrite(s_queue, &data);
+
+		ESP_LOGD(TAG, "stack free: %u bytes", (unsigned)uxTaskGetStackHighWaterMark(NULL));
+		xTaskDelayUntil(&last_wake, pdMS_TO_TICKS(s_period_ms));
+	}
+}
+
 esp_err_t sensors_init(void)
 {
 	init_bmp280();
@@ -192,3 +214,25 @@ esp_err_t sensors_read(sensors_data_t *data)
 
 	return ESP_OK;
 }
+
+esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue)
+{
+	ESP_RETURN_ON_FALSE(ret_queue && period_ms > 0, ESP_ERR_INVALID_ARG, TAG, "invalid args");
+	ESP_RETURN_ON_FALSE(!s_task, ESP_ERR_INVALID_STATE, TAG, "already started");
+	ESP_RETURN_ON_ERROR(sensors_init(), TAG, "init failed");
+
+	s_queue = xQueueCreate(1, sizeof(sensors_data_t));
+	ESP_RETURN_ON_FALSE(s_queue, ESP_ERR_NO_MEM, TAG, "queue alloc failed");
+
+	s_period_ms = period_ms;
+	if (xTaskCreate(sensors_task, "sensors", SENSORS_TASK_STACK, NULL,
+	                SENSORS_TASK_PRIO, &s_task) != pdPASS) {
+		vQueueDelete(s_queue);
+		s_queue = NULL;
+		return ESP_ERR_NO_MEM;
+	}
+
+	*ret_queue = s_queue;
+	return ESP_OK;
+}
+

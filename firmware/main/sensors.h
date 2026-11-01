@@ -2,6 +2,8 @@
 
 #include <stdbool.h>
 #include "esp_err.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 
 typedef struct {
 	bool valid;
@@ -21,3 +23,16 @@ typedef struct {
 esp_err_t sensors_init(void);
 
 esp_err_t sensors_read(sensors_data_t *data);
+
+/**
+ * @brief Start the periodic sensor task.
+ *
+ * Initializes the sensors, then reads them every @p period_ms and
+ * publishes the latest sample to a single-slot queue.
+ *
+ * @param period_ms  Time between reads, in milliseconds.
+ * @param ret_queue  Returned queue of sensors_data_t.
+ * @return ESP_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_STATE if already
+ *         started, ESP_ERR_NO_MEM, or an error from sensors_init().
+ */
+esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue);
