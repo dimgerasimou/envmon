@@ -22,3 +22,12 @@ jobs:
         with:
           name: envmon-firmware
           path: firmware/build/*.bin
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: |
+          find firmware/main firmware/components -name '*.[ch]' \
+            | xargs clang-format --dry-run --Werror

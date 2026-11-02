@@ -8,42 +8,43 @@
 extern "C" {
 #endif
 
-#define ENS160_ADDR_LOW     0x52    /*!< ADDR pin to GND */
-#define ENS160_ADDR_HIGH    0x53    /*!< ADDR pin to VCC (most breakout boards) */
+#define ENS160_ADDR_LOW  0x52 /*!< ADDR pin to GND */
+#define ENS160_ADDR_HIGH 0x53 /*!< ADDR pin to VCC (most breakout boards) */
 
 /**
  * @brief How far the sensor trusts its own output
  */
 typedef enum {
-	ENS160_VALIDITY_NORMAL = 0,     /*!< Output is valid */
-	ENS160_VALIDITY_WARMUP = 1,     /*!< About 3 minutes after every power-on */
-	ENS160_VALIDITY_STARTUP = 2,    /*!< About 1 hour, once in a new sensor's life */
-	ENS160_VALIDITY_INVALID = 3,    /*!< No valid output */
+	ENS160_VALIDITY_NORMAL = 0,  /*!< Output is valid */
+	ENS160_VALIDITY_WARMUP = 1,  /*!< About 3 minutes after every power-on */
+	ENS160_VALIDITY_STARTUP = 2, /*!< About 1 hour, once in a new sensor's life */
+	ENS160_VALIDITY_INVALID = 3, /*!< No valid output */
 } ens160_validity_t;
 
 /**
  * @brief One set of air quality values
  */
 typedef struct {
-	uint8_t aqi;                    /*!< UBA air quality index, 1 (excellent) to 5 (unhealthy) */
-	uint16_t tvoc_ppb;              /*!< Total volatile organic compounds, ppb */
-	uint16_t eco2_ppm;              /*!< Equivalent CO2, ppm: estimated from VOCs, not measured CO2 */
-	ens160_validity_t validity;     /*!< Whether the values above can be trusted yet */
+	uint8_t aqi;       /*!< UBA air quality index, 1 (excellent) to 5 (unhealthy) */
+	uint16_t tvoc_ppb; /*!< Total volatile organic compounds, ppb */
+	uint16_t eco2_ppm; /*!< Equivalent CO2, ppm: estimated from VOCs, not measured CO2 */
+	ens160_validity_t validity; /*!< Whether the values above can be trusted yet */
 } ens160_data_t;
 
 /**
  * @brief Sensor configuration
  */
 typedef struct {
-	uint8_t addr;   /*!< ENS160_ADDR_LOW or ENS160_ADDR_HIGH */
+	uint8_t addr; /*!< ENS160_ADDR_LOW or ENS160_ADDR_HIGH */
 } ens160_config_t;
 
 /**
  * @brief Default configuration: address 0x53
  */
-#define ENS160_DEFAULT_CONFIG() { \
-	.addr = ENS160_ADDR_HIGH, \
-}
+#define ENS160_DEFAULT_CONFIG()                                                                    \
+	{                                                                                          \
+		.addr = ENS160_ADDR_HIGH,                                                          \
+	}
 
 /**
  * @brief Handle of an ENS160 sensor
@@ -68,7 +69,7 @@ typedef struct ens160 *ens160_handle_t;
  *      - Other: I2C error from the bus
  */
 esp_err_t ens160_init(i2c_master_bus_handle_t bus, const ens160_config_t *config,
-		      ens160_handle_t *ret_handle);
+                      ens160_handle_t *ret_handle);
 
 /**
  * @brief Give the sensor the ambient temperature and humidity it uses for compensation

@@ -1,0 +1,28 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Tabs for leading indentation, spaces for alignment
+UseTab: ForIndentation
+IndentWidth: 8
+TabWidth: 8
+ContinuationIndentWidth: 8
+
+# Kernel-style braces: function braces on their own line
+BreakBeforeBraces: Linux
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+IndentCaseLabels: false
+
+ColumnLimit: 100
+AlignAfterOpenBracket: Align
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 4
+PointerAlignment: Right
+SortIncludes: Never
+SpaceBeforeParens: ControlStatements
+Cpp11BracedListStyle: false
+AlignConsecutiveMacros: AcrossComments
+AlignConsecutiveBitFields: AcrossComments
+...

@@ -8,11 +8,11 @@
 #include "aht10.h"
 #include "ens160.h"
 
-#define MAX_FAILURES        3                       /* consecutive read errors before re-init */
-#define RETRY_MIN           pdMS_TO_TICKS(5000)     /* first re-init delay */
-#define RETRY_MAX           pdMS_TO_TICKS(300000)   /* re-init delay cap (5 min) */
-#define SENSORS_TASK_STACK  4096
-#define SENSORS_TASK_PRIO   5
+#define MAX_FAILURES       3                     /* consecutive read errors before re-init */
+#define RETRY_MIN          pdMS_TO_TICKS(5000)   /* first re-init delay */
+#define RETRY_MAX          pdMS_TO_TICKS(300000) /* re-init delay cap (5 min) */
+#define SENSORS_TASK_STACK 4096
+#define SENSORS_TASK_PRIO  5
 
 static const char *TAG = "sensors";
 
@@ -26,9 +26,9 @@ static _Atomic uint32_t s_period_ms = 30000;
 
 typedef struct {
 	const char *name;
-	uint8_t failures;       /* consecutive read errors */
-	TickType_t backoff;     /* 0 = healthy, else wait this long between init attempts */
-	TickType_t last_try;    /* tick of the last init attempt */
+	uint8_t failures;    /* consecutive read errors */
+	TickType_t backoff;  /* 0 = healthy, else wait this long between init attempts */
+	TickType_t last_try; /* tick of the last init attempt */
 } sensor_state_t;
 
 /* Whether a sensor that is not initialized should be tried now. */
@@ -53,8 +53,8 @@ static esp_err_t init_done(sensor_state_t *s, esp_err_t err)
 	}
 
 	if (!s->backoff) {
-		ESP_LOGE(TAG, "%s unavailable: %s, retrying in background",
-		         s->name, esp_err_to_name(err));
+		ESP_LOGE(TAG, "%s unavailable: %s, retrying in background", s->name,
+		         esp_err_to_name(err));
 		s->backoff = RETRY_MIN;
 	} else {
 		ESP_LOGD(TAG, "%s still unavailable: %s", s->name, esp_err_to_name(err));
@@ -66,14 +66,14 @@ static esp_err_t init_done(sensor_state_t *s, esp_err_t err)
 /* Record a read error. Returns true when the driver should be deleted and re-initialized. */
 static bool read_failed(sensor_state_t *s, esp_err_t err)
 {
-	ESP_LOGW(TAG, "%s read failed (%u/%u): %s",
-	         s->name, s->failures + 1, MAX_FAILURES, esp_err_to_name(err));
+	ESP_LOGW(TAG, "%s read failed (%u/%u): %s", s->name, s->failures + 1, MAX_FAILURES,
+	         esp_err_to_name(err));
 	if (++s->failures < MAX_FAILURES)
 		return false;
 
 	ESP_LOGE(TAG, "%s lost, re-initializing", s->name);
 	s->failures = 0;
-	s->backoff = 0;         /* try again on the next cycle */
+	s->backoff = 0; /* try again on the next cycle */
 	return true;
 }
 
@@ -300,8 +300,8 @@ esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue)
 	open_all();
 
 	atomic_store(&s_period_ms, period_ms);
-	if (xTaskCreate(sensors_task, "sensors", SENSORS_TASK_STACK, NULL,
-	                SENSORS_TASK_PRIO, &s_task) != pdPASS) {
+	if (xTaskCreate(sensors_task, "sensors", SENSORS_TASK_STACK, NULL, SENSORS_TASK_PRIO,
+	                &s_task) != pdPASS) {
 		vQueueDelete(s_queue);
 		s_queue = NULL;
 		return ESP_ERR_NO_MEM;
@@ -310,4 +310,3 @@ esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue)
 	*ret_queue = s_queue;
 	return ESP_OK;
 }
-

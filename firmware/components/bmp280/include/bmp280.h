@@ -8,8 +8,8 @@
 extern "C" {
 #endif
 
-#define BMP280_ADDR_LOW     0x76    /*!< SDO pin to GND */
-#define BMP280_ADDR_HIGH    0x77    /*!< SDO pin to VCC */
+#define BMP280_ADDR_LOW  0x76 /*!< SDO pin to GND */
+#define BMP280_ADDR_HIGH 0x77 /*!< SDO pin to VCC */
 
 /**
  * @brief Oversampling: more samples per measurement, less noise, slower
@@ -37,8 +37,8 @@ typedef enum {
  * @brief Power mode
  */
 typedef enum {
-	BMP280_MODE_FORCED,     /*!< One measurement per bmp280_read(), sleeps in between */
-	BMP280_MODE_NORMAL,     /*!< Measures continuously; bmp280_read() returns the latest */
+	BMP280_MODE_FORCED, /*!< One measurement per bmp280_read(), sleeps in between */
+	BMP280_MODE_NORMAL, /*!< Measures continuously; bmp280_read() returns the latest */
 } bmp280_mode_t;
 
 /**
@@ -59,25 +59,26 @@ typedef enum {
  * @brief Sensor configuration
  */
 typedef struct {
-	uint8_t addr;               /*!< BMP280_ADDR_LOW or BMP280_ADDR_HIGH */
-	bmp280_mode_t mode;         /*!< Forced or normal mode */
-	bmp280_osr_t temp_osr;      /*!< Temperature oversampling */
-	bmp280_osr_t press_osr;     /*!< Pressure oversampling */
-	bmp280_filter_t filter;     /*!< IIR filter coefficient */
-	bmp280_standby_t standby;   /*!< Standby time, normal mode only */
+	uint8_t addr;             /*!< BMP280_ADDR_LOW or BMP280_ADDR_HIGH */
+	bmp280_mode_t mode;       /*!< Forced or normal mode */
+	bmp280_osr_t temp_osr;    /*!< Temperature oversampling */
+	bmp280_osr_t press_osr;   /*!< Pressure oversampling */
+	bmp280_filter_t filter;   /*!< IIR filter coefficient */
+	bmp280_standby_t standby; /*!< Standby time, normal mode only */
 } bmp280_config_t;
 
 /**
  * @brief Default configuration: forced mode, low noise, no filter
  */
-#define BMP280_DEFAULT_CONFIG() { \
-	.addr = BMP280_ADDR_LOW, \
-	.mode = BMP280_MODE_FORCED, \
-	.temp_osr = BMP280_OSR_X2, \
-	.press_osr = BMP280_OSR_X16, \
-	.filter = BMP280_FILTER_OFF, \
-	.standby = BMP280_STANDBY_1000_MS, \
-}
+#define BMP280_DEFAULT_CONFIG()                                                                    \
+	{                                                                                          \
+		.addr = BMP280_ADDR_LOW,                                                           \
+		.mode = BMP280_MODE_FORCED,                                                        \
+		.temp_osr = BMP280_OSR_X2,                                                         \
+		.press_osr = BMP280_OSR_X16,                                                       \
+		.filter = BMP280_FILTER_OFF,                                                       \
+		.standby = BMP280_STANDBY_1000_MS,                                                 \
+	}
 
 /**
  * @brief Handle of a BMP280 sensor
@@ -100,7 +101,7 @@ typedef struct bmp280 *bmp280_handle_t;
  *      - ESP_ERR_TIMEOUT: The sensor did not finish its reset
  */
 esp_err_t bmp280_init(i2c_master_bus_handle_t bus, const bmp280_config_t *config,
-		      bmp280_handle_t *ret_handle);
+                      bmp280_handle_t *ret_handle);
 
 /**
  * @brief Read compensated temperature and pressure
@@ -135,4 +136,3 @@ void bmp280_delete(bmp280_handle_t handle);
 #ifdef __cplusplus
 }
 #endif
-

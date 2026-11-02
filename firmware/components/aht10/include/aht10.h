@@ -8,22 +8,23 @@
 extern "C" {
 #endif
 
-#define AHT10_ADDR_LOW      0x38    /*!< ADR pin to GND (most modules) */
-#define AHT10_ADDR_HIGH     0x39    /*!< ADR pin to VCC */
+#define AHT10_ADDR_LOW  0x38 /*!< ADR pin to GND (most modules) */
+#define AHT10_ADDR_HIGH 0x39 /*!< ADR pin to VCC */
 
 /**
  * @brief Sensor configuration
  */
 typedef struct {
-	uint8_t addr;   /*!< AHT10_ADDR_LOW or AHT10_ADDR_HIGH */
+	uint8_t addr; /*!< AHT10_ADDR_LOW or AHT10_ADDR_HIGH */
 } aht10_config_t;
 
 /**
  * @brief Default configuration: address 0x38
  */
-#define AHT10_DEFAULT_CONFIG() { \
-	.addr = AHT10_ADDR_LOW, \
-}
+#define AHT10_DEFAULT_CONFIG()                                                                     \
+	{                                                                                          \
+		.addr = AHT10_ADDR_LOW,                                                            \
+	}
 
 /**
  * @brief Handle of an AHT10 sensor
@@ -45,7 +46,7 @@ typedef struct aht10 *aht10_handle_t;
  *      - ESP_ERR_NOT_SUPPORTED: A device answered, but did not report itself calibrated
  */
 esp_err_t aht10_init(i2c_master_bus_handle_t bus, const aht10_config_t *config,
-		     aht10_handle_t *ret_handle);
+                     aht10_handle_t *ret_handle);
 
 /**
  * @brief Measure temperature and relative humidity

@@ -10,16 +10,16 @@
 extern "C" {
 #endif
 
-#define SENSORS_PERIOD_MIN_MS   2000        /*!< Shortest allowed read period */
-#define SENSORS_PERIOD_MAX_MS   3600000     /*!< Longest allowed read period (1 h) */
+#define SENSORS_PERIOD_MIN_MS 2000    /*!< Shortest allowed read period */
+#define SENSORS_PERIOD_MAX_MS 3600000 /*!< Longest allowed read period (1 h) */
 
 /**
  * @brief One measured quantity and the sensor that supplied it
  */
 typedef struct {
-	bool valid;             /*!< false when no sensor could supply it this cycle */
-	float value;            /*!< Measured value, unit given by the field name */
-	const char *src;        /*!< Sensor that supplied the value, e.g. "aht10" */
+	bool valid;      /*!< false when no sensor could supply it this cycle */
+	float value;     /*!< Measured value, unit given by the field name */
+	const char *src; /*!< Sensor that supplied the value, e.g. "aht10" */
 } sensors_param_t;
 
 /**
@@ -74,4 +74,3 @@ uint32_t sensors_get_period(void);
 #ifdef __cplusplus
 }
 #endif
-

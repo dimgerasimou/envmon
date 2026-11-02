@@ -7,39 +7,39 @@
 #include "bmp280.h"
 
 /* registers, datasheet section 4.2 */
-#define REG_CALIB           0x88    /* 24 bytes, 0x88..0x9F */
-#define REG_ID              0xD0
-#define REG_RESET           0xE0
-#define REG_STATUS          0xF3
-#define REG_CTRL_MEAS       0xF4
-#define REG_CONFIG          0xF5
-#define REG_DATA            0xF7    /* 6 bytes: press[3], temp[3] */
+#define REG_CALIB     0x88 /* 24 bytes, 0x88..0x9F */
+#define REG_ID        0xD0
+#define REG_RESET     0xE0
+#define REG_STATUS    0xF3
+#define REG_CTRL_MEAS 0xF4
+#define REG_CONFIG    0xF5
+#define REG_DATA      0xF7 /* 6 bytes: press[3], temp[3] */
 
-#define CHIP_ID             0x58
-#define RESET_CMD           0xB6
-#define STATUS_MEASURING    (1 << 3)
-#define STATUS_IM_UPDATE    (1 << 0)
+#define CHIP_ID          0x58
+#define RESET_CMD        0xB6
+#define STATUS_MEASURING (1 << 3)
+#define STATUS_IM_UPDATE (1 << 0)
 
 /* mode bits in ctrl_meas[1:0] */
-#define MODE_SLEEP          0x00
-#define MODE_FORCED         0x01
-#define MODE_NORMAL         0x03
+#define MODE_SLEEP  0x00
+#define MODE_FORCED 0x01
+#define MODE_NORMAL 0x03
 
 /* data registers hold this value when no measurement has been made */
-#define ADC_NO_DATA         0x80000
+#define ADC_NO_DATA 0x80000
 
-#define I2C_SPEED_HZ        100000
-#define I2C_TIMEOUT_MS      100
-#define POLL_MS             5
-#define POLL_TRIES          20
+#define I2C_SPEED_HZ   100000
+#define I2C_TIMEOUT_MS 100
+#define POLL_MS        5
+#define POLL_TRIES     20
 
 static const char *TAG = "bmp280";
 
 struct bmp280 {
 	i2c_master_dev_handle_t i2c;
 	bmp280_config_t config;
-	uint8_t ctrl_meas;          /* osrs_t, osrs_p and mode, ready to write */
-	uint32_t meas_ms;           /* worst-case measurement time */
+	uint8_t ctrl_meas; /* osrs_t, osrs_p and mode, ready to write */
+	uint32_t meas_ms;  /* worst-case measurement time */
 	/* factory calibration, datasheet section 3.11.2 */
 	uint16_t T1;
 	int16_t T2, T3;
@@ -80,10 +80,9 @@ static uint16_t u16le(const uint8_t *p)
 
 static bool config_valid(const bmp280_config_t *c)
 {
-	return c->mode <= BMP280_MODE_NORMAL &&
-	       c->temp_osr >= BMP280_OSR_X1 && c->temp_osr <= BMP280_OSR_X16 &&
-	       c->press_osr >= BMP280_OSR_X1 && c->press_osr <= BMP280_OSR_X16 &&
-	       c->filter <= BMP280_FILTER_16 &&
+	return c->mode <= BMP280_MODE_NORMAL && c->temp_osr >= BMP280_OSR_X1 &&
+	       c->temp_osr <= BMP280_OSR_X16 && c->press_osr >= BMP280_OSR_X1 &&
+	       c->press_osr <= BMP280_OSR_X16 && c->filter <= BMP280_FILTER_16 &&
 	       c->standby <= BMP280_STANDBY_4000_MS;
 }
 
@@ -127,7 +126,8 @@ static esp_err_t apply_config(bmp280_handle_t dev)
 	dev->ctrl_meas = (c->temp_osr << 5) | (c->press_osr << 2);
 	dev->meas_ms = measurement_ms(c);
 
-	ESP_RETURN_ON_ERROR(write_reg(dev, REG_CTRL_MEAS, dev->ctrl_meas | MODE_SLEEP), TAG, "sleep");
+	ESP_RETURN_ON_ERROR(write_reg(dev, REG_CTRL_MEAS, dev->ctrl_meas | MODE_SLEEP), TAG,
+	                    "sleep");
 	ESP_RETURN_ON_ERROR(write_reg(dev, REG_CONFIG, config), TAG, "config");
 	ESP_RETURN_ON_ERROR(write_reg(dev, REG_CTRL_MEAS, dev->ctrl_meas | mode), TAG, "ctrl_meas");
 	return ESP_OK;
@@ -137,7 +137,8 @@ static esp_err_t apply_config(bmp280_handle_t dev)
 static int32_t compensate_t(bmp280_handle_t dev, int32_t adc_t, int32_t *t_fine)
 {
 	int32_t var1 = ((((adc_t >> 3) - ((int32_t)dev->T1 << 1))) * dev->T2) >> 11;
-	int32_t var2 = (((((adc_t >> 4) - dev->T1) * ((adc_t >> 4) - dev->T1)) >> 12) * dev->T3) >> 14;
+	int32_t var2 =
+	        (((((adc_t >> 4) - dev->T1) * ((adc_t >> 4) - dev->T1)) >> 12) * dev->T3) >> 14;
 
 	*t_fine = var1 + var2;
 	return (*t_fine * 5 + 128) >> 8;
@@ -166,7 +167,7 @@ static uint32_t compensate_p(bmp280_handle_t dev, int32_t adc_p, int32_t t_fine)
 }
 
 esp_err_t bmp280_init(i2c_master_bus_handle_t bus, const bmp280_config_t *config,
-		      bmp280_handle_t *ret_handle)
+                      bmp280_handle_t *ret_handle)
 {
 	ESP_RETURN_ON_FALSE(bus && config && ret_handle, ESP_ERR_INVALID_ARG, TAG, "NULL argument");
 	*ret_handle = NULL;
@@ -185,13 +186,13 @@ esp_err_t bmp280_init(i2c_master_bus_handle_t bus, const bmp280_config_t *config
 		.scl_speed_hz = I2C_SPEED_HZ,
 	};
 	ESP_GOTO_ON_ERROR(i2c_master_bus_add_device(bus, &dev_cfg, &dev->i2c), fail, TAG,
-			  "add device 0x%02x", addr);
+	                  "add device 0x%02x", addr);
 
 	uint8_t id;
 	ESP_GOTO_ON_FALSE(read_regs(dev, REG_ID, &id, 1) == ESP_OK, ESP_ERR_NOT_FOUND, fail, TAG,
-			  "no response at 0x%02x", addr);
+	                  "no response at 0x%02x", addr);
 	ESP_GOTO_ON_FALSE(id == CHIP_ID, ESP_ERR_NOT_SUPPORTED, fail, TAG,
-			  "0x%02x is not a BMP280 (id 0x%02x)", addr, id);
+	                  "0x%02x is not a BMP280 (id 0x%02x)", addr, id);
 
 	/* reset to a known state, wait until it has copied its calibration from NVM */
 	ESP_GOTO_ON_ERROR(write_reg(dev, REG_RESET, RESET_CMD), fail, TAG, "reset");
@@ -202,8 +203,8 @@ esp_err_t bmp280_init(i2c_master_bus_handle_t bus, const bmp280_config_t *config
 	ESP_GOTO_ON_ERROR(apply_config(dev), fail, TAG, "apply config");
 
 	ESP_LOGD(TAG, "ready at 0x%02x, %s mode, measurement %lu ms", addr,
-		 config->mode == BMP280_MODE_NORMAL ? "normal" : "forced",
-		 (unsigned long)dev->meas_ms);
+	         config->mode == BMP280_MODE_NORMAL ? "normal" : "forced",
+	         (unsigned long)dev->meas_ms);
 	*ret_handle = dev;
 	return ESP_OK;
 
@@ -214,14 +215,17 @@ fail:
 
 esp_err_t bmp280_read(bmp280_handle_t handle, float *temp_c, float *press_pa)
 {
-	ESP_RETURN_ON_FALSE(handle && temp_c && press_pa, ESP_ERR_INVALID_ARG, TAG, "NULL argument");
+	ESP_RETURN_ON_FALSE(handle && temp_c && press_pa, ESP_ERR_INVALID_ARG, TAG,
+	                    "NULL argument");
 
 	if (handle->config.mode == BMP280_MODE_FORCED) {
 		/* start one measurement; the sensor returns to sleep when done */
-		ESP_RETURN_ON_ERROR(write_reg(handle, REG_CTRL_MEAS, handle->ctrl_meas | MODE_FORCED),
-				    TAG, "start");
+		ESP_RETURN_ON_ERROR(
+		        write_reg(handle, REG_CTRL_MEAS, handle->ctrl_meas | MODE_FORCED), TAG,
+		        "start");
 		vTaskDelay(pdMS_TO_TICKS(handle->meas_ms));
-		ESP_RETURN_ON_ERROR(wait_status_clear(handle, STATUS_MEASURING), TAG, "measurement timeout");
+		ESP_RETURN_ON_ERROR(wait_status_clear(handle, STATUS_MEASURING), TAG,
+		                    "measurement timeout");
 	}
 
 	/* one burst read, so pressure and temperature come from the same measurement */
@@ -233,7 +237,7 @@ esp_err_t bmp280_read(bmp280_handle_t handle, float *temp_c, float *press_pa)
 	int32_t adc_t = (d[3] << 12) | (d[4] << 4) | (d[5] >> 4);
 
 	if (adc_t == ADC_NO_DATA)
-		return ESP_ERR_INVALID_STATE;    /* normal mode, first measurement not ready */
+		return ESP_ERR_INVALID_STATE; /* normal mode, first measurement not ready */
 
 	int32_t t_fine;
 	int32_t t = compensate_t(handle, adc_t, &t_fine);
@@ -250,9 +254,8 @@ void bmp280_delete(bmp280_handle_t handle)
 	if (!handle)
 		return;
 	if (handle->i2c) {
-		write_reg(handle, REG_CTRL_MEAS, MODE_SLEEP);    /* stop normal mode, best effort */
+		write_reg(handle, REG_CTRL_MEAS, MODE_SLEEP); /* stop normal mode, best effort */
 		i2c_master_bus_rm_device(handle->i2c);
 	}
 	free(handle);
 }
-

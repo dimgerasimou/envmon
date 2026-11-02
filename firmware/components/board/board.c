@@ -21,7 +21,8 @@ esp_err_t board_i2c_init(void)
 	esp_err_t err = i2c_new_master_bus(&cfg, &i2c_bus);
 
 	if (err == ESP_OK)
-		ESP_LOGD(TAG, "I2C bus on SDA=%d SCL=%d", CONFIG_BOARD_I2C_SDA, CONFIG_BOARD_I2C_SCL);
+		ESP_LOGD(TAG, "I2C bus on SDA=%d SCL=%d", CONFIG_BOARD_I2C_SDA,
+		         CONFIG_BOARD_I2C_SCL);
 	return err;
 }
 

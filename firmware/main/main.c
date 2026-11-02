@@ -23,11 +23,10 @@ void app_main(void)
 	for (;;) {
 		xQueueReceive(queue, &data, portMAX_DELAY);
 		log_param("temperature", &data.temperature_c, "C");
-		log_param("humidity",    &data.humidity_pct,  "%");
-		log_param("pressure",    &data.pressure_hpa,  "hPa");
-		log_param("aqi",         &data.aqi,           "");
-		log_param("tvoc",        &data.tvoc_ppb,      "ppb");
-		log_param("eco2",        &data.eco2_ppm,      "ppm");
+		log_param("humidity", &data.humidity_pct, "%");
+		log_param("pressure", &data.pressure_hpa, "hPa");
+		log_param("aqi", &data.aqi, "");
+		log_param("tvoc", &data.tvoc_ppb, "ppb");
+		log_param("eco2", &data.eco2_ppm, "ppm");
 	}
 }
-
