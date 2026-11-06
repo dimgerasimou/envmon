@@ -1,16 +1,22 @@
+#include <math.h>
 #include <stdatomic.h>
 #include "sensors.h"
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "board.h"
-#include "bmp280.h"
 #include "aht10.h"
+#include "bmp280.h"
 #include "ens160.h"
+#include "sen66.h"
+#include "sht40.h"
+#include "stcc4.h"
 
 #define MAX_FAILURES       3                     /* consecutive read errors before re-init */
 #define RETRY_MIN          pdMS_TO_TICKS(5000)   /* first re-init delay */
 #define RETRY_MAX          pdMS_TO_TICKS(300000) /* re-init delay cap (5 min) */
+#define PRESSURE_STEP_PA   100.0f                /* resend CO2 compensation after 1 hPa change */
+#define SEN66_STATUS_EVERY 30                    /* check SEN66 health every N reads */
 #define SENSORS_TASK_STACK 4096
 #define SENSORS_TASK_PRIO  5
 
@@ -66,6 +72,10 @@ static esp_err_t init_done(sensor_state_t *s, esp_err_t err)
 /* Record a read error. Returns true when the driver should be deleted and re-initialized. */
 static bool read_failed(sensor_state_t *s, esp_err_t err)
 {
+	if (err == ESP_ERR_NOT_FINISHED) { /* sensor just started, no result yet */
+		ESP_LOGD(TAG, "%s not ready yet", s->name);
+		return false;
+	}
 	ESP_LOGW(TAG, "%s read failed (%u/%u): %s", s->name, s->failures + 1, MAX_FAILURES,
 	         esp_err_to_name(err));
 	if (++s->failures < MAX_FAILURES)
@@ -77,10 +87,10 @@ static bool read_failed(sensor_state_t *s, esp_err_t err)
 	return true;
 }
 
-/* Fill a value unless a higher-priority sensor already did this cycle. */
+/* Fill a value unless a higher-priority sensor already did this cycle, or it is unknown (NAN). */
 static void set_value(sensors_param_t *v, float value, const char *src)
 {
-	if (v->valid)
+	if (v->valid || isnan(value))
 		return;
 	v->value = value;
 	v->src = src;
@@ -92,6 +102,140 @@ static void set_value(sensors_param_t *v, float value, const char *src)
  * Priority between sensors that measure the same quantity is the call order
  * in read_all().
  */
+
+#if CONFIG_BOARD_HAS_SHT40
+static sht40_handle_t s_sht40;
+static sensor_state_t s_sht40_st = { .name = "SHT40" };
+
+static esp_err_t open_sht40(void)
+{
+	sht40_config_t cfg = SHT40_DEFAULT_CONFIG();
+
+	cfg.addr = CONFIG_BOARD_SHT40_ADDR;
+	return init_done(&s_sht40_st, sht40_init(board_i2c_bus(), &cfg, &s_sht40));
+}
+
+static void read_sht40(sensors_data_t *data)
+{
+	float t, rh;
+
+	if (!s_sht40 && (!retry_due(&s_sht40_st) || open_sht40() != ESP_OK))
+		return;
+
+	esp_err_t err = sht40_read(s_sht40, &t, &rh);
+
+	if (err != ESP_OK) {
+		if (read_failed(&s_sht40_st, err)) {
+			sht40_delete(s_sht40);
+			s_sht40 = NULL;
+		}
+		return;
+	}
+	s_sht40_st.failures = 0;
+	set_value(&data->temperature_c, t, "sht40");
+	set_value(&data->humidity_pct, rh, "sht40");
+}
+#endif
+
+#if CONFIG_BOARD_HAS_SEN66
+static sen66_handle_t s_sen66;
+static sensor_state_t s_sen66_st = { .name = "SEN66" };
+static float s_sen66_pressure; /* compensation last sent, 0 = none since init */
+
+static esp_err_t open_sen66(void)
+{
+	sen66_config_t cfg = SEN66_DEFAULT_CONFIG();
+
+	s_sen66_pressure = 0;
+	return init_done(&s_sen66_st, sen66_init(board_i2c_bus(), &cfg, &s_sen66));
+}
+
+/* Error flags stay set until reset; log only when they change. */
+static void check_sen66_status(void)
+{
+	static unsigned reads;
+	static uint32_t last_status;
+	uint32_t status;
+
+	if (reads++ % SEN66_STATUS_EVERY != 0 || sen66_read_status(s_sen66, &status) != ESP_OK)
+		return;
+	if (status != last_status) {
+		if (status) /* bits: SEN66_STATUS_* in sen66.h */
+			ESP_LOGW(TAG, "SEN66 status 0x%08lx", (unsigned long)status);
+		else
+			ESP_LOGI(TAG, "SEN66 status OK");
+		last_status = status;
+	}
+}
+
+static void read_sen66(sensors_data_t *data)
+{
+	sen66_data_t d;
+
+	if (!s_sen66 && (!retry_due(&s_sen66_st) || open_sen66() != ESP_OK))
+		return;
+
+	esp_err_t err = sen66_read(s_sen66, &d);
+
+	if (err != ESP_OK) {
+		if (read_failed(&s_sen66_st, err)) {
+			sen66_delete(s_sen66);
+			s_sen66 = NULL;
+		}
+		return;
+	}
+	s_sen66_st.failures = 0;
+	check_sen66_status();
+
+	/* unknown values (NAN) right after start are skipped by set_value() */
+	set_value(&data->temperature_c, d.temp_c, "sen66");
+	set_value(&data->humidity_pct, d.humidity_pct, "sen66");
+	set_value(&data->co2_ppm, d.co2_ppm, "sen66");
+	set_value(&data->pm1_0, d.pm1_0, "sen66");
+	set_value(&data->pm2_5, d.pm2_5, "sen66");
+	set_value(&data->pm4_0, d.pm4_0, "sen66");
+	set_value(&data->pm10, d.pm10, "sen66");
+	set_value(&data->voc_index, d.voc_index, "sen66");
+	set_value(&data->nox_index, d.nox_index, "sen66");
+}
+#endif
+
+#if CONFIG_BOARD_HAS_STCC4
+static stcc4_handle_t s_stcc4;
+static sensor_state_t s_stcc4_st = { .name = "STCC4" };
+static float s_stcc4_pressure; /* compensation last sent, 0 = none since init */
+
+static esp_err_t open_stcc4(void)
+{
+	stcc4_config_t cfg = STCC4_DEFAULT_CONFIG();
+
+	cfg.addr = CONFIG_BOARD_STCC4_ADDR;
+	s_stcc4_pressure = 0;
+	return init_done(&s_stcc4_st, stcc4_init(board_i2c_bus(), &cfg, &s_stcc4));
+}
+
+static void read_stcc4(sensors_data_t *data)
+{
+	stcc4_data_t d;
+
+	if (!s_stcc4 && (!retry_due(&s_stcc4_st) || open_stcc4() != ESP_OK))
+		return;
+
+	esp_err_t err = stcc4_read(s_stcc4, &d);
+
+	if (err != ESP_OK) {
+		if (read_failed(&s_stcc4_st, err)) {
+			stcc4_delete(s_stcc4);
+			s_stcc4 = NULL;
+		}
+		return;
+	}
+	s_stcc4_st.failures = 0;
+	set_value(&data->temperature_c, d.temp_c, "stcc4");
+	set_value(&data->humidity_pct, d.humidity_pct, "stcc4");
+	set_value(&data->co2_ppm, d.co2_ppm, "stcc4");
+}
+#endif
 
 #if CONFIG_BOARD_HAS_AHT10
 static aht10_handle_t s_aht10;
@@ -212,8 +356,42 @@ static void read_ens160(sensors_data_t *data)
 }
 #endif
 
+/*
+ * CO2 sensors are more accurate with the real ambient pressure. Send it when
+ * it moved by PRESSURE_STEP_PA since the last send, or after a re-init.
+ * Uses this cycle's pressure, so it applies from the next read on.
+ */
+static void update_co2_pressure(const sensors_data_t *data)
+{
+	if (!data->pressure_hpa.valid)
+		return;
+
+	float pa = data->pressure_hpa.value * 100.0f;
+
+#if CONFIG_BOARD_HAS_SEN66
+	if (s_sen66 && fabsf(pa - s_sen66_pressure) >= PRESSURE_STEP_PA &&
+	    sen66_set_pressure(s_sen66, pa) == ESP_OK)
+		s_sen66_pressure = pa;
+#endif
+#if CONFIG_BOARD_HAS_STCC4
+	if (s_stcc4 && fabsf(pa - s_stcc4_pressure) >= PRESSURE_STEP_PA &&
+	    stcc4_set_pressure(s_stcc4, pa) == ESP_OK)
+		s_stcc4_pressure = pa;
+#endif
+	(void)pa;
+}
+
 static void open_all(void)
 {
+#if CONFIG_BOARD_HAS_SHT40
+	open_sht40();
+#endif
+#if CONFIG_BOARD_HAS_SEN66
+	open_sen66();
+#endif
+#if CONFIG_BOARD_HAS_STCC4
+	open_stcc4();
+#endif
 #if CONFIG_BOARD_HAS_AHT10
 	open_aht10();
 #endif
@@ -225,11 +403,25 @@ static void open_all(void)
 #endif
 }
 
-/* Call order is priority order. ENS160 last: it uses the T/RH read before it. */
+/*
+ * Call order is priority order:
+ *   temperature, humidity: SHT40 > SEN66 > STCC4 > AHT10 > BMP280
+ *   CO2: SEN66 > STCC4
+ * ENS160 last: it uses the T/RH read before it.
+ */
 static void read_all(sensors_data_t *data)
 {
 	*data = (sensors_data_t){ 0 };
 
+#if CONFIG_BOARD_HAS_SHT40
+	read_sht40(data);
+#endif
+#if CONFIG_BOARD_HAS_SEN66
+	read_sen66(data);
+#endif
+#if CONFIG_BOARD_HAS_STCC4
+	read_stcc4(data);
+#endif
 #if CONFIG_BOARD_HAS_AHT10
 	read_aht10(data);
 #endif
@@ -239,6 +431,7 @@ static void read_all(sensors_data_t *data)
 #if CONFIG_BOARD_HAS_ENS160
 	read_ens160(data);
 #endif
+	update_co2_pressure(data);
 }
 
 static void sensors_task(void *arg)
@@ -288,7 +481,8 @@ esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue)
 	                    "invalid args");
 	ESP_RETURN_ON_FALSE(!s_task, ESP_ERR_INVALID_STATE, TAG, "already started");
 
-#if !CONFIG_BOARD_HAS_AHT10 && !CONFIG_BOARD_HAS_BMP280 && !CONFIG_BOARD_HAS_ENS160
+#if !CONFIG_BOARD_HAS_SHT40 && !CONFIG_BOARD_HAS_SEN66 && !CONFIG_BOARD_HAS_STCC4 &&               \
+        !CONFIG_BOARD_HAS_AHT10 && !CONFIG_BOARD_HAS_BMP280 && !CONFIG_BOARD_HAS_ENS160
 	ESP_LOGE(TAG, "no sensor enabled in board config");
 	return ESP_ERR_NOT_SUPPORTED;
 #endif
@@ -296,7 +490,8 @@ esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue)
 	s_queue = xQueueCreate(1, sizeof(sensors_data_t));
 	ESP_RETURN_ON_FALSE(s_queue, ESP_ERR_NO_MEM, TAG, "queue alloc failed");
 
-	/* missing sensors are not fatal: they get retried from the task */
+	/* missing sensors are not fatal: they get retried from the task. SEN66/STCC4 take ~1.2 s
+	 * each */
 	open_all();
 
 	atomic_store(&s_period_ms, period_ms);

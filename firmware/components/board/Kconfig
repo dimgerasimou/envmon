@@ -55,5 +55,35 @@ menu "Board"
 			default 0x53
 			help
 			  0x53 with ADDR tied to VCC (most modules), 0x52 to GND.
+
+		config BOARD_HAS_SHT40
+			bool "SHT40 (temperature, humidity)"
+			default n
+
+		config BOARD_SHT40_ADDR
+			hex "SHT40 I2C address"
+			depends on BOARD_HAS_SHT40
+			range 0x44 0x45
+			default 0x44
+			help
+			  0x44 for SHT40-AD1B (most modules), 0x45 for SHT40-BD1B.
+
+		config BOARD_HAS_STCC4
+			bool "STCC4 (CO2, plus temperature and humidity from its SHT4x)"
+			default n
+
+		config BOARD_STCC4_ADDR
+			hex "STCC4 I2C address"
+			depends on BOARD_HAS_STCC4
+			range 0x64 0x65
+			default 0x64
+			help
+			  Set by the address jumper on the DFRobot board.
+
+		config BOARD_HAS_SEN66
+			bool "SEN66 (PM, temperature, humidity, VOC, NOx, CO2)"
+			default n
+			help
+			  Fixed address 0x6B. Needs 3.3 V and up to 350 mA peak.
 	endmenu
 endmenu

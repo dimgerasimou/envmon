@@ -24,14 +24,24 @@ typedef struct {
 
 /**
  * @brief One sample of every quantity the node can measure
+ *
+ * A field stays invalid when no sensor on this board measures it, or none
+ * could this cycle.
  */
 typedef struct {
-	sensors_param_t temperature_c;
-	sensors_param_t humidity_pct;
-	sensors_param_t pressure_hpa;
-	sensors_param_t aqi;
-	sensors_param_t tvoc_ppb;
-	sensors_param_t eco2_ppm;
+	sensors_param_t temperature_c; /*!< °C */
+	sensors_param_t humidity_pct;  /*!< %RH */
+	sensors_param_t pressure_hpa;  /*!< hPa */
+	sensors_param_t co2_ppm;       /*!< Measured CO2, ppm (SEN66, STCC4) */
+	sensors_param_t pm1_0;         /*!< µg/m³ */
+	sensors_param_t pm2_5;         /*!< µg/m³ */
+	sensors_param_t pm4_0;         /*!< µg/m³ */
+	sensors_param_t pm10;          /*!< µg/m³ */
+	sensors_param_t voc_index;     /*!< Sensirion VOC index, 1..500, 100 = typical */
+	sensors_param_t nox_index;     /*!< Sensirion NOx index, 1..500, 1 = typical */
+	sensors_param_t aqi;           /*!< ENS160 UBA index, 1..5 */
+	sensors_param_t tvoc_ppb;      /*!< ENS160 total VOC, ppb */
+	sensors_param_t eco2_ppm;      /*!< ENS160 CO2 estimated from VOCs, ppm */
 } sensors_data_t;
 
 /**
