@@ -31,4 +31,5 @@ CompileFlags:
     - -nostdinc
 @CLANGD_INCLUDES@Diagnostics:
   UnusedIncludes: None
+  Suppress: [atomic_op_needs_trivial_copy]
 ]])
