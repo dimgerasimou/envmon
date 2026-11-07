@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "board.h"
 #include "console.h"
+#include "mqtt_pub.h"
 #include "net.h"
 #include "sensors.h"
 #include "settings.h"
@@ -35,7 +36,7 @@ void app_main(void)
 	ESP_ERROR_CHECK(sensors_start(cfg.period_ms, &queue));
 	ESP_ERROR_CHECK(console_start());
 
-	/* one shared event loop: WiFi and IP events now, MQTT later */
+	/* default event loop: WiFi and IP events */
 	ESP_ERROR_CHECK(esp_event_loop_create_default());
 
 	/* no WiFi is not fatal: the node keeps measuring and the console still works */
@@ -47,8 +48,19 @@ void app_main(void)
 	else if (err != ESP_OK)
 		ESP_LOGE(TAG, "WiFi failed to start: %s", esp_err_to_name(err));
 
+	/* started even before WiFi is up: the client keeps retrying on its own */
+	if (err == ESP_OK) {
+		err = mqtt_pub_start();
+		if (err == ESP_ERR_NOT_FOUND)
+			ESP_LOGW(TAG,
+			         "MQTT not configured: set mqtt_uri mqtt://<host>:1883, reboot");
+		else if (err != ESP_OK)
+			ESP_LOGE(TAG, "MQTT failed to start: %s", esp_err_to_name(err));
+	}
+
 	for (;;) {
 		xQueueReceive(queue, &data, portMAX_DELAY);
 		log_sample(&data);
+		mqtt_pub_state(&data); /* not connected: skipped, the next sample follows */
 	}
 }

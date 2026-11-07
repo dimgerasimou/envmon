@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "esp_console.h"
 #include "console.h"
+#include "mqtt_pub.h"
 #include "net.h"
 #include "sensors.h"
 #include "settings.h"
@@ -234,6 +235,16 @@ static int cmd_status(int argc, char **argv)
 	if (net.disconnects)
 		printf("drops      %lu, last: %s (%u)\n", (unsigned long)net.disconnects,
 		       net_reason_str(net.last_reason), net.last_reason);
+
+	mqtt_pub_status_t mqtt;
+
+	mqtt_pub_get_status(&mqtt);
+	if (!mqtt.started)
+		printf("mqtt       off (no mqtt_uri saved, or no WiFi)\n");
+	else
+		printf("mqtt       %s, %lu sent, %lu drops\n",
+		       mqtt.connected ? "connected" : "connecting", (unsigned long)mqtt.sent,
+		       (unsigned long)mqtt.drops);
 	return 0;
 }
 
@@ -260,7 +271,7 @@ esp_err_t console_start(void)
 		  .hint = "[all]",
 		  .func = cmd_sensors },
 		{ .command = "status",
-		  .help = "Uptime, reset reason, memory, WiFi",
+		  .help = "Uptime, reset reason, memory, WiFi, MQTT",
 		  .func = cmd_status },
 		{ .command = "reboot", .help = "Restart the node", .func = cmd_reboot },
 		{ .command = "factory-reset",
