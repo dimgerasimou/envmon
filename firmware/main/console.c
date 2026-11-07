@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "esp_console.h"
 #include "console.h"
+#include "net.h"
 #include "sensors.h"
 #include "settings.h"
 
@@ -60,6 +61,8 @@ static int cmd_set(int argc, char **argv)
 		return 1;
 	}
 	printf("saved\n");
+	if (strncmp(argv[1], "wifi_", 5) == 0)
+		printf("reboot to connect with the new WiFi settings\n");
 	return 0;
 }
 
@@ -198,6 +201,25 @@ static int cmd_status(int argc, char **argv)
 	printf("heap       %lu free, %lu lowest\n", (unsigned long)esp_get_free_heap_size(),
 	       (unsigned long)esp_get_minimum_free_heap_size());
 	printf("idf        %s\n", esp_get_idf_version());
+
+	net_status_t net;
+
+	net_get_status(&net);
+	switch (net.state) {
+	case NET_OFF:
+		printf("wifi       off (no wifi_ssid saved)\n");
+		break;
+	case NET_CONNECTING:
+		printf("wifi       connecting\n");
+		break;
+	case NET_CONNECTED:
+		printf("wifi       connected, channel %u, %d dBm\n", net.channel, net.rssi);
+		printf("ip         %s\n", net.ip);
+		break;
+	}
+	if (net.disconnects)
+		printf("drops      %lu, last: %s (%u)\n", (unsigned long)net.disconnects,
+		       net_reason_str(net.last_reason), net.last_reason);
 	return 0;
 }
 
@@ -223,7 +245,9 @@ esp_err_t console_start(void)
 		  .help = "Print the latest sample; 'all' also shows lower-priority sensors",
 		  .hint = "[all]",
 		  .func = cmd_sensors },
-		{ .command = "status", .help = "Uptime, reset reason, memory", .func = cmd_status },
+		{ .command = "status",
+		  .help = "Uptime, reset reason, memory, WiFi",
+		  .func = cmd_status },
 		{ .command = "reboot", .help = "Restart the node", .func = cmd_reboot },
 		{ .command = "factory-reset",
 		  .help = "Erase all settings and restart",

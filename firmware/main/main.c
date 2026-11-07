@@ -1,8 +1,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "esp_event.h"
 #include "esp_log.h"
 #include "board.h"
 #include "console.h"
+#include "net.h"
 #include "sensors.h"
 #include "settings.h"
 
@@ -33,9 +35,17 @@ void app_main(void)
 	ESP_ERROR_CHECK(sensors_start(cfg.period_ms, &queue));
 	ESP_ERROR_CHECK(console_start());
 
-	if (!cfg.wifi_ssid[0])
-		ESP_LOGW(TAG,
-		         "WiFi not configured: set wifi_ssid <name>, set wifi_pass <password>");
+	/* one shared event loop: WiFi and IP events now, MQTT later */
+	ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+	/* no WiFi is not fatal: the node keeps measuring and the console still works */
+	esp_err_t err = net_start();
+
+	if (err == ESP_ERR_NOT_FOUND)
+		ESP_LOGW(TAG, "WiFi not configured: set wifi_ssid <name>, set wifi_pass "
+		              "<password>, reboot");
+	else if (err != ESP_OK)
+		ESP_LOGE(TAG, "WiFi failed to start: %s", esp_err_to_name(err));
 
 	for (;;) {
 		xQueueReceive(queue, &data, portMAX_DELAY);
