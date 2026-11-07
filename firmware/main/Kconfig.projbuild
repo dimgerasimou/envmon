@@ -5,6 +5,16 @@ menu "envmon"
 		range 2 3600
 		default 30
 		help
-		  Used until Home Assistant sets another period.
+		  Used until a period is saved from the console or Home Assistant.
+
+	config ENVMON_PM_WARMUP_S
+		int "Hide PM values after the SEN66 starts (seconds)"
+		range 0 600
+		default 120
+		help
+		  When its fan starts, the SEN66 blows out dust that settled inside
+		  and the first PM readings are far too high (453 -> 27 ug/m3 over
+		  90 s was seen). PM is reported as unknown for this long after every
+		  (re)start of the sensor. 0 = report right away.
 
 endmenu

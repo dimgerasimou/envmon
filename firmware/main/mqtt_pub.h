@@ -16,7 +16,9 @@ extern "C" {
  * as client "envmon-<node_name>". On every connect it publishes "online",
  * retained, to envmon/<node_name>/availability; the broker publishes
  * "offline" there for us (last will) if the node disappears. Also
- * (re)publishes the Home Assistant discovery configs on every connect. The client
+ * (re)publishes the Home Assistant discovery configs on every connect, and
+ * listens on envmon/<node_name>/period/set for a new read period in
+ * seconds, which it saves, applies and echoes to envmon/<node_name>/period. The client
  * reconnects on its own, so this can be called before WiFi is up.
  *
  * settings_init() and esp_event_loop_create_default() must be called first.

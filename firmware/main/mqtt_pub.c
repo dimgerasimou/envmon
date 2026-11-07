@@ -1,5 +1,7 @@
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "esp_check.h"
 #include "esp_log.h"
@@ -17,12 +19,66 @@ static const char *TAG = "mqtt";
 static esp_mqtt_client_handle_t s_client; /* NULL until started */
 static char s_topic_state[TOPIC_MAX];
 static char s_topic_avail[TOPIC_MAX];
+static char s_topic_period[TOPIC_MAX];
+static char s_topic_period_set[TOPIC_MAX];
 static char s_node[SETTINGS_NODE_NAME_MAX];
+static ha_topics_t s_ha_topics;
 
 /* written by the MQTT task, read by main and the console */
 static atomic_bool s_connected;
 static atomic_uint s_sent;
 static atomic_uint s_drops;
+static atomic_uint s_period_sent; /* last period published, 0 = must publish */
+
+/* Retained, so HA shows the real period even if it starts after us. */
+static void publish_period(void)
+{
+	char txt[12];
+	uint32_t s = sensors_get_period() / 1000;
+
+	snprintf(txt, sizeof(txt), "%lu", (unsigned long)s);
+	if (esp_mqtt_client_publish(s_client, s_topic_period, txt, 0, 1, 1) >= 0)
+		atomic_store(&s_period_sent, s);
+}
+
+/* HA sent a new period, as text in seconds, e.g. "60" (or "60.0") */
+static void on_period_set(const char *data, int len)
+{
+	char txt[16];
+	char *end;
+
+	if (len <= 0 || len >= (int)sizeof(txt)) {
+		ESP_LOGW(TAG, "period: bad payload");
+		publish_period();
+		return;
+	}
+	memcpy(txt, data, len); /* MQTT payloads are not NUL-terminated */
+	txt[len] = '\0';
+
+	float s = strtof(txt, &end);
+	esp_err_t err = ESP_ERR_INVALID_ARG;
+
+	/* range-check the float first, so a huge value can't overflow the cast */
+	if (end != txt && *end == '\0' && s >= SENSORS_PERIOD_MIN_MS / 1000.0f &&
+	    s <= SENSORS_PERIOD_MAX_MS / 1000.0f) {
+		uint32_t ms = (uint32_t)lroundf(s) * 1000;
+
+		err = settings_set_period(ms); /* saved: survives a reboot */
+		if (err == ESP_OK)
+			err = sensors_set_period(ms); /* applied now */
+	}
+
+	if (err == ESP_OK)
+		ESP_LOGI(TAG, "period set to %s s from Home Assistant", txt);
+	else
+		ESP_LOGW(TAG, "period '%s' rejected: %s", txt, esp_err_to_name(err));
+	publish_period(); /* echo the real value: a rejected one snaps back in HA */
+}
+
+static bool topic_is(const esp_mqtt_event_t *e, const char *topic)
+{
+	return e->topic_len == (int)strlen(topic) && memcmp(e->topic, topic, e->topic_len) == 0;
+}
 
 /* Runs in the MQTT client's own task. */
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -33,7 +89,10 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 	case MQTT_EVENT_CONNECTED:
 		ESP_LOGI(TAG, "connected");
 		atomic_store(&s_connected, true);
-		ha_publish_discovery(s_client, s_node, s_topic_state, s_topic_avail);
+		ha_publish_discovery(s_client, &s_ha_topics);
+		/* clean session: the broker forgets subscriptions, so subscribe on every connect */
+		esp_mqtt_client_subscribe(s_client, s_topic_period_set, 1);
+		publish_period();
 		/* retained, so it replaces the "offline" the broker may hold from our last will */
 		esp_mqtt_client_publish(s_client, s_topic_avail, "online", 0, 1, 1);
 		break;
@@ -43,6 +102,12 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 			atomic_fetch_add(&s_drops, 1);
 			ESP_LOGW(TAG, "disconnected, retrying");
 		}
+		break;
+
+	case MQTT_EVENT_DATA:
+		/* small payloads arrive in one piece; current_data_offset > 0 = a fragment */
+		if (e->current_data_offset == 0 && topic_is(e, s_topic_period_set))
+			on_period_set(e->data, e->data_len);
 		break;
 
 	case MQTT_EVENT_ERROR:
@@ -72,7 +137,18 @@ esp_err_t mqtt_pub_start(void)
 	strcpy(s_node, cfg.node_name); /* same buffer size */
 	snprintf(s_topic_state, sizeof(s_topic_state), "envmon/%s/state", cfg.node_name);
 	snprintf(s_topic_avail, sizeof(s_topic_avail), "envmon/%s/availability", cfg.node_name);
+	snprintf(s_topic_period, sizeof(s_topic_period), "envmon/%s/period", cfg.node_name);
+	snprintf(s_topic_period_set, sizeof(s_topic_period_set), "envmon/%s/period/set",
+	         cfg.node_name);
 	snprintf(client_id, sizeof(client_id), "envmon-%s", cfg.node_name);
+
+	s_ha_topics = (ha_topics_t){
+		.node = s_node,
+		.state = s_topic_state,
+		.avail = s_topic_avail,
+		.period = s_topic_period,
+		.period_set = s_topic_period_set,
+	};
 
 	const esp_mqtt_client_config_t mcfg = {
 		.broker.address.uri = cfg.mqtt_uri,
@@ -144,6 +220,9 @@ esp_err_t mqtt_pub_state(const sensors_data_t *d)
 		return ESP_FAIL;
 
 	atomic_fetch_add(&s_sent, 1);
+	/* period changed from the console (or a publish failed): tell HA */
+	if (atomic_load(&s_period_sent) != sensors_get_period() / 1000)
+		publish_period();
 	ESP_LOGD(TAG, "%s %s", s_topic_state, buf);
 	return ESP_OK;
 }

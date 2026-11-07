@@ -162,13 +162,15 @@ static void read_sht40(sample_t *smp)
 #if CONFIG_BOARD_HAS_SEN66
 static sen66_handle_t s_sen66;
 static sensor_state_t s_sen66_st = { .name = "SEN66" };
-static float s_sen66_pressure; /* compensation last sent, 0 = none since init */
+static float s_sen66_pressure;   /* compensation last sent, 0 = none since init */
+static TickType_t s_sen66_start; /* tick of the last (re)start, for the PM warm-up */
 
 static esp_err_t open_sen66(void)
 {
 	sen66_config_t cfg = SEN66_DEFAULT_CONFIG();
 
 	s_sen66_pressure = 0;
+	s_sen66_start = xTaskGetTickCount();
 	return init_done(&s_sen66_st, sen66_init(board_i2c_bus(), &cfg, &s_sen66));
 }
 
@@ -213,12 +215,17 @@ static void read_sen66(sample_t *smp)
 	set_value(smp, SENSORS_TEMPERATURE, d.temp_c, "sen66");
 	set_value(smp, SENSORS_HUMIDITY, d.humidity_pct, "sen66");
 	set_value(smp, SENSORS_CO2, d.co2_ppm, "sen66");
+	set_value(smp, SENSORS_VOC_INDEX, d.voc_index, "sen66");
+	set_value(smp, SENSORS_NOX_INDEX, d.nox_index, "sen66");
+
+	/* the fan first blows out settled dust: early PM reads far too high */
+	if (xTaskGetTickCount() - s_sen66_start < pdMS_TO_TICKS(CONFIG_ENVMON_PM_WARMUP_S * 1000))
+		return; /* PM stays invalid -> "-" in the console, null over MQTT */
+
 	set_value(smp, SENSORS_PM1_0, d.pm1_0, "sen66");
 	set_value(smp, SENSORS_PM2_5, d.pm2_5, "sen66");
 	set_value(smp, SENSORS_PM4_0, d.pm4_0, "sen66");
 	set_value(smp, SENSORS_PM10, d.pm10, "sen66");
-	set_value(smp, SENSORS_VOC_INDEX, d.voc_index, "sen66");
-	set_value(smp, SENSORS_NOX_INDEX, d.nox_index, "sen66");
 }
 #endif
 
