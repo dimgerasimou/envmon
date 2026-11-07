@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include "sensors.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -87,15 +88,36 @@ static bool read_failed(sensor_state_t *s, esp_err_t err)
 	return true;
 }
 
-/* Fill a value unless a higher-priority sensor already did this cycle, or it is unknown (NAN). */
-static void set_value(sensors_param_t *v, float value, const char *src)
+/* One cycle's results: the winner per quantity, plus every reading from every sensor. */
+typedef struct {
+	sensors_data_t best;
+	sensors_readings_t all;
+} sample_t;
+
+/*
+ * Record a reading from one sensor. It always goes into the full list; it
+ * becomes the quantity's value unless a higher-priority sensor already set it
+ * this cycle. Unknown values (NAN) are dropped.
+ */
+static void set_value(sample_t *smp, sensors_qty_t q, float value, const char *src)
 {
-	if (v->valid || isnan(value))
+	if (isnan(value))
 		return;
-	v->value = value;
-	v->src = src;
-	v->valid = true;
+
+	if (smp->all.count < SENSORS_MAX_READINGS)
+		smp->all.r[smp->all.count++] =
+		        (sensors_reading_t){ .qty = q, .value = value, .src = src };
+
+	sensors_param_t *v = &smp->best.qty[q];
+
+	if (!v->valid)
+		*v = (sensors_param_t){ .valid = true, .value = value, .src = src };
 }
+
+/* copy of the latest sample for sensors_get_latest() */
+static SemaphoreHandle_t s_latest_lock;
+static sample_t s_latest;
+static bool s_have_latest;
 
 /*
  * Sensors. Each one: open (init with board config), read (with re-init on errors).
@@ -115,7 +137,7 @@ static esp_err_t open_sht40(void)
 	return init_done(&s_sht40_st, sht40_init(board_i2c_bus(), &cfg, &s_sht40));
 }
 
-static void read_sht40(sensors_data_t *data)
+static void read_sht40(sample_t *smp)
 {
 	float t, rh;
 
@@ -132,8 +154,8 @@ static void read_sht40(sensors_data_t *data)
 		return;
 	}
 	s_sht40_st.failures = 0;
-	set_value(&data->temperature_c, t, "sht40");
-	set_value(&data->humidity_pct, rh, "sht40");
+	set_value(smp, SENSORS_TEMPERATURE, t, "sht40");
+	set_value(smp, SENSORS_HUMIDITY, rh, "sht40");
 }
 #endif
 
@@ -168,7 +190,7 @@ static void check_sen66_status(void)
 	}
 }
 
-static void read_sen66(sensors_data_t *data)
+static void read_sen66(sample_t *smp)
 {
 	sen66_data_t d;
 
@@ -188,15 +210,15 @@ static void read_sen66(sensors_data_t *data)
 	check_sen66_status();
 
 	/* unknown values (NAN) right after start are skipped by set_value() */
-	set_value(&data->temperature_c, d.temp_c, "sen66");
-	set_value(&data->humidity_pct, d.humidity_pct, "sen66");
-	set_value(&data->co2_ppm, d.co2_ppm, "sen66");
-	set_value(&data->pm1_0, d.pm1_0, "sen66");
-	set_value(&data->pm2_5, d.pm2_5, "sen66");
-	set_value(&data->pm4_0, d.pm4_0, "sen66");
-	set_value(&data->pm10, d.pm10, "sen66");
-	set_value(&data->voc_index, d.voc_index, "sen66");
-	set_value(&data->nox_index, d.nox_index, "sen66");
+	set_value(smp, SENSORS_TEMPERATURE, d.temp_c, "sen66");
+	set_value(smp, SENSORS_HUMIDITY, d.humidity_pct, "sen66");
+	set_value(smp, SENSORS_CO2, d.co2_ppm, "sen66");
+	set_value(smp, SENSORS_PM1_0, d.pm1_0, "sen66");
+	set_value(smp, SENSORS_PM2_5, d.pm2_5, "sen66");
+	set_value(smp, SENSORS_PM4_0, d.pm4_0, "sen66");
+	set_value(smp, SENSORS_PM10, d.pm10, "sen66");
+	set_value(smp, SENSORS_VOC_INDEX, d.voc_index, "sen66");
+	set_value(smp, SENSORS_NOX_INDEX, d.nox_index, "sen66");
 }
 #endif
 
@@ -214,7 +236,7 @@ static esp_err_t open_stcc4(void)
 	return init_done(&s_stcc4_st, stcc4_init(board_i2c_bus(), &cfg, &s_stcc4));
 }
 
-static void read_stcc4(sensors_data_t *data)
+static void read_stcc4(sample_t *smp)
 {
 	stcc4_data_t d;
 
@@ -231,9 +253,9 @@ static void read_stcc4(sensors_data_t *data)
 		return;
 	}
 	s_stcc4_st.failures = 0;
-	set_value(&data->temperature_c, d.temp_c, "stcc4");
-	set_value(&data->humidity_pct, d.humidity_pct, "stcc4");
-	set_value(&data->co2_ppm, d.co2_ppm, "stcc4");
+	set_value(smp, SENSORS_TEMPERATURE, d.temp_c, "stcc4");
+	set_value(smp, SENSORS_HUMIDITY, d.humidity_pct, "stcc4");
+	set_value(smp, SENSORS_CO2, d.co2_ppm, "stcc4");
 }
 #endif
 
@@ -249,7 +271,7 @@ static esp_err_t open_aht10(void)
 	return init_done(&s_aht10_st, aht10_init(board_i2c_bus(), &cfg, &s_aht10));
 }
 
-static void read_aht10(sensors_data_t *data)
+static void read_aht10(sample_t *smp)
 {
 	float t, rh;
 
@@ -266,8 +288,8 @@ static void read_aht10(sensors_data_t *data)
 		return;
 	}
 	s_aht10_st.failures = 0;
-	set_value(&data->temperature_c, t, "aht10");
-	set_value(&data->humidity_pct, rh, "aht10");
+	set_value(smp, SENSORS_TEMPERATURE, t, "aht10");
+	set_value(smp, SENSORS_HUMIDITY, rh, "aht10");
 }
 #endif
 
@@ -284,7 +306,7 @@ static esp_err_t open_bmp280(void)
 	return init_done(&s_bmp280_st, bmp280_init(board_i2c_bus(), &cfg, &s_bmp280));
 }
 
-static void read_bmp280(sensors_data_t *data)
+static void read_bmp280(sample_t *smp)
 {
 	float t, p;
 
@@ -301,8 +323,8 @@ static void read_bmp280(sensors_data_t *data)
 		return;
 	}
 	s_bmp280_st.failures = 0;
-	set_value(&data->temperature_c, t, "bmp280");
-	set_value(&data->pressure_hpa, p / 100.0f, "bmp280");
+	set_value(smp, SENSORS_TEMPERATURE, t, "bmp280");
+	set_value(smp, SENSORS_PRESSURE, p / 100.0f, "bmp280");
 }
 #endif
 
@@ -318,7 +340,7 @@ static esp_err_t open_ens160(void)
 	return init_done(&s_ens160_st, ens160_init(board_i2c_bus(), &cfg, &s_ens160));
 }
 
-static void read_ens160(sensors_data_t *data)
+static void read_ens160(sample_t *smp)
 {
 	static ens160_validity_t last_validity = ENS160_VALIDITY_NORMAL;
 	ens160_data_t d;
@@ -328,9 +350,11 @@ static void read_ens160(sensors_data_t *data)
 		return;
 
 	/* best ambient values from the sensors read before this one */
-	if (data->temperature_c.valid && data->humidity_pct.valid)
-		err = ens160_set_compensation(s_ens160, data->temperature_c.value,
-		                              data->humidity_pct.value);
+	const sensors_param_t *t = &smp->best.qty[SENSORS_TEMPERATURE];
+	const sensors_param_t *rh = &smp->best.qty[SENSORS_HUMIDITY];
+
+	if (t->valid && rh->valid)
+		err = ens160_set_compensation(s_ens160, t->value, rh->value);
 	if (err == ESP_OK)
 		err = ens160_read(s_ens160, &d);
 
@@ -350,9 +374,9 @@ static void read_ens160(sensors_data_t *data)
 	if (d.validity != ENS160_VALIDITY_NORMAL)
 		return;
 
-	set_value(&data->aqi, d.aqi, "ens160");
-	set_value(&data->tvoc_ppb, d.tvoc_ppb, "ens160");
-	set_value(&data->eco2_ppm, d.eco2_ppm, "ens160");
+	set_value(smp, SENSORS_AQI, d.aqi, "ens160");
+	set_value(smp, SENSORS_TVOC, d.tvoc_ppb, "ens160");
+	set_value(smp, SENSORS_ECO2, d.eco2_ppm, "ens160");
 }
 #endif
 
@@ -361,12 +385,14 @@ static void read_ens160(sensors_data_t *data)
  * it moved by PRESSURE_STEP_PA since the last send, or after a re-init.
  * Uses this cycle's pressure, so it applies from the next read on.
  */
-static void update_co2_pressure(const sensors_data_t *data)
+static void update_co2_pressure(const sensors_data_t *best)
 {
-	if (!data->pressure_hpa.valid)
+	const sensors_param_t *p = &best->qty[SENSORS_PRESSURE];
+
+	if (!p->valid)
 		return;
 
-	float pa = data->pressure_hpa.value * 100.0f;
+	float pa = p->value * 100.0f;
 
 #if CONFIG_BOARD_HAS_SEN66
 	if (s_sen66 && fabsf(pa - s_sen66_pressure) >= PRESSURE_STEP_PA &&
@@ -409,40 +435,46 @@ static void open_all(void)
  *   CO2: SEN66 > STCC4
  * ENS160 last: it uses the T/RH read before it.
  */
-static void read_all(sensors_data_t *data)
+static void read_all(sample_t *smp)
 {
-	*data = (sensors_data_t){ 0 };
+	*smp = (sample_t){ 0 };
 
 #if CONFIG_BOARD_HAS_SHT40
-	read_sht40(data);
+	read_sht40(smp);
 #endif
 #if CONFIG_BOARD_HAS_SEN66
-	read_sen66(data);
+	read_sen66(smp);
 #endif
 #if CONFIG_BOARD_HAS_STCC4
-	read_stcc4(data);
+	read_stcc4(smp);
 #endif
 #if CONFIG_BOARD_HAS_AHT10
-	read_aht10(data);
+	read_aht10(smp);
 #endif
 #if CONFIG_BOARD_HAS_BMP280
-	read_bmp280(data);
+	read_bmp280(smp);
 #endif
 #if CONFIG_BOARD_HAS_ENS160
-	read_ens160(data);
+	read_ens160(smp);
 #endif
-	update_co2_pressure(data);
+	update_co2_pressure(&smp->best);
 }
 
 static void sensors_task(void *arg)
 {
-	sensors_data_t data;
+	static sample_t smp; /* static: ~450 bytes, keep it off the task stack */
 
 	for (;;) {
 		TickType_t start = xTaskGetTickCount();
 
-		read_all(&data);
-		xQueueOverwrite(s_queue, &data);
+		read_all(&smp);
+		xQueueOverwrite(s_queue, &smp.best);
+
+		xSemaphoreTake(s_latest_lock, portMAX_DELAY);
+		s_latest = smp;
+		s_have_latest = true;
+		xSemaphoreGive(s_latest_lock);
+
 		ESP_LOGD(TAG, "stack free: %u bytes", (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
 		/* sleep for the rest of the period, or until sensors_set_period() wakes us */
@@ -470,6 +502,82 @@ esp_err_t sensors_set_period(uint32_t period_ms)
 	return ESP_OK;
 }
 
+esp_err_t sensors_get_latest(sensors_data_t *best, sensors_readings_t *all)
+{
+	ESP_RETURN_ON_FALSE(best || all, ESP_ERR_INVALID_ARG, TAG, "NULL arguments");
+	if (!s_latest_lock)
+		return ESP_ERR_INVALID_STATE;
+
+	xSemaphoreTake(s_latest_lock, portMAX_DELAY);
+	bool have = s_have_latest;
+
+	if (have && best)
+		*best = s_latest.best;
+	if (have && all)
+		*all = s_latest.all;
+	xSemaphoreGive(s_latest_lock);
+	return have ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
+/* name and unit of each quantity; ASCII so console columns line up */
+static const sensors_qty_info_t s_info[SENSORS_QTY_COUNT] = {
+	[SENSORS_TEMPERATURE] = { "temperature", "C" },
+	[SENSORS_HUMIDITY] = { "humidity", "%" },
+	[SENSORS_PRESSURE] = { "pressure", "hPa" },
+	[SENSORS_CO2] = { "co2", "ppm" },
+	[SENSORS_PM1_0] = { "pm1_0", "ug/m3" },
+	[SENSORS_PM2_5] = { "pm2_5", "ug/m3" },
+	[SENSORS_PM4_0] = { "pm4_0", "ug/m3" },
+	[SENSORS_PM10] = { "pm10", "ug/m3" },
+	[SENSORS_VOC_INDEX] = { "voc_index", "" },
+	[SENSORS_NOX_INDEX] = { "nox_index", "" },
+	[SENSORS_AQI] = { "aqi", "" },
+	[SENSORS_TVOC] = { "tvoc", "ppb" },
+	[SENSORS_ECO2] = { "eco2", "ppm" },
+};
+
+#define Q(q) (1UL << (q))
+
+/* What the sensors enabled in the board config can measure. A constant after optimization. */
+static uint32_t supported_mask(void)
+{
+	uint32_t m = 0;
+
+#if CONFIG_BOARD_HAS_SHT40
+	m |= Q(SENSORS_TEMPERATURE) | Q(SENSORS_HUMIDITY);
+#endif
+#if CONFIG_BOARD_HAS_SEN66
+	m |= Q(SENSORS_TEMPERATURE) | Q(SENSORS_HUMIDITY) | Q(SENSORS_CO2);
+	m |= Q(SENSORS_PM1_0) | Q(SENSORS_PM2_5) | Q(SENSORS_PM4_0) | Q(SENSORS_PM10);
+	m |= Q(SENSORS_VOC_INDEX) | Q(SENSORS_NOX_INDEX);
+#endif
+#if CONFIG_BOARD_HAS_STCC4
+	m |= Q(SENSORS_TEMPERATURE) | Q(SENSORS_HUMIDITY) | Q(SENSORS_CO2);
+#endif
+#if CONFIG_BOARD_HAS_AHT10
+	m |= Q(SENSORS_TEMPERATURE) | Q(SENSORS_HUMIDITY);
+#endif
+#if CONFIG_BOARD_HAS_BMP280
+	m |= Q(SENSORS_TEMPERATURE) | Q(SENSORS_PRESSURE);
+#endif
+#if CONFIG_BOARD_HAS_ENS160
+	m |= Q(SENSORS_AQI) | Q(SENSORS_TVOC) | Q(SENSORS_ECO2);
+#endif
+	return m;
+}
+
+const sensors_qty_info_t *sensors_qty_info(sensors_qty_t q)
+{
+	static const sensors_qty_info_t unknown = { "?", "" };
+
+	return q < SENSORS_QTY_COUNT ? &s_info[q] : &unknown;
+}
+
+bool sensors_qty_supported(sensors_qty_t q)
+{
+	return q < SENSORS_QTY_COUNT && (supported_mask() & Q(q));
+}
+
 uint32_t sensors_get_period(void)
 {
 	return atomic_load(&s_period_ms);
@@ -489,6 +597,8 @@ esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue)
 
 	s_queue = xQueueCreate(1, sizeof(sensors_data_t));
 	ESP_RETURN_ON_FALSE(s_queue, ESP_ERR_NO_MEM, TAG, "queue alloc failed");
+	s_latest_lock = xSemaphoreCreateMutex();
+	ESP_RETURN_ON_FALSE(s_latest_lock, ESP_ERR_NO_MEM, TAG, "mutex alloc failed");
 
 	/* missing sensors are not fatal: they get retried from the task. SEN66/STCC4 take ~1.2 s
 	 * each */

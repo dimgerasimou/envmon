@@ -2,38 +2,43 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "board.h"
+#include "console.h"
 #include "sensors.h"
+#include "settings.h"
 
 static const char *TAG = "envmon";
 
-static void log_param(const char *name, const sensors_param_t *p, const char *unit)
+/* Debug level: the "sensors" console command shows the same data on demand. */
+static void log_sample(const sensors_data_t *d)
 {
-	if (p->valid)
-		ESP_LOGI(TAG, "%-12s %8.2f %-5s (%s)", name, p->value, unit, p->src);
+	for (sensors_qty_t q = 0; q < SENSORS_QTY_COUNT; q++) {
+		const sensors_param_t *p = &d->qty[q];
+
+		if (p->valid)
+			ESP_LOGD(TAG, "%-12s %8.2f %-5s (%s)", sensors_qty_info(q)->name, p->value,
+			         sensors_qty_info(q)->unit, p->src);
+	}
 }
 
 void app_main(void)
 {
 	QueueHandle_t queue;
 	sensors_data_t data;
+	settings_t cfg;
+
+	ESP_ERROR_CHECK(settings_init());
+	settings_get(&cfg);
 
 	ESP_ERROR_CHECK(board_i2c_init());
-	ESP_ERROR_CHECK(sensors_start(CONFIG_ENVMON_SENSOR_PERIOD_S * 1000, &queue));
+	ESP_ERROR_CHECK(sensors_start(cfg.period_ms, &queue));
+	ESP_ERROR_CHECK(console_start());
+
+	if (!cfg.wifi_ssid[0])
+		ESP_LOGW(TAG,
+		         "WiFi not configured: set wifi_ssid <name>, set wifi_pass <password>");
 
 	for (;;) {
 		xQueueReceive(queue, &data, portMAX_DELAY);
-		log_param("temperature", &data.temperature_c, "C");
-		log_param("humidity", &data.humidity_pct, "%");
-		log_param("pressure", &data.pressure_hpa, "hPa");
-		log_param("co2", &data.co2_ppm, "ppm");
-		log_param("pm1.0", &data.pm1_0, "ug/m3");
-		log_param("pm2.5", &data.pm2_5, "ug/m3");
-		log_param("pm4.0", &data.pm4_0, "ug/m3");
-		log_param("pm10", &data.pm10, "ug/m3");
-		log_param("voc index", &data.voc_index, "");
-		log_param("nox index", &data.nox_index, "");
-		log_param("aqi", &data.aqi, "");
-		log_param("tvoc", &data.tvoc_ppb, "ppb");
-		log_param("eco2", &data.eco2_ppm, "ppm");
+		log_sample(&data);
 	}
 }

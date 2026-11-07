@@ -1,6 +1,8 @@
+
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -23,26 +25,61 @@ typedef struct {
 } sensors_param_t;
 
 /**
- * @brief One sample of every quantity the node can measure
- *
- * A field stays invalid when no sensor on this board measures it, or none
- * could this cycle.
+ * @brief Every quantity the firmware knows about
+ */
+typedef enum {
+	SENSORS_TEMPERATURE, /*!< °C */
+	SENSORS_HUMIDITY,    /*!< %RH */
+	SENSORS_PRESSURE,    /*!< hPa */
+	SENSORS_CO2,         /*!< Measured CO2, ppm (SEN66, STCC4) */
+	SENSORS_PM1_0,       /*!< µg/m³ */
+	SENSORS_PM2_5,       /*!< µg/m³ */
+	SENSORS_PM4_0,       /*!< µg/m³ */
+	SENSORS_PM10,        /*!< µg/m³ */
+	SENSORS_VOC_INDEX,   /*!< Sensirion VOC index, 1..500, 100 = typical */
+	SENSORS_NOX_INDEX,   /*!< Sensirion NOx index, 1..500, 1 = typical */
+	SENSORS_AQI,         /*!< ENS160 UBA index, 1..5 */
+	SENSORS_TVOC,        /*!< ENS160 total VOC, ppb */
+	SENSORS_ECO2,        /*!< ENS160 CO2 estimated from VOCs, ppm */
+	SENSORS_QTY_COUNT,
+} sensors_qty_t;
+
+/**
+ * @brief Name and unit of a quantity, e.g. "temperature", "C"
  */
 typedef struct {
-	sensors_param_t temperature_c; /*!< °C */
-	sensors_param_t humidity_pct;  /*!< %RH */
-	sensors_param_t pressure_hpa;  /*!< hPa */
-	sensors_param_t co2_ppm;       /*!< Measured CO2, ppm (SEN66, STCC4) */
-	sensors_param_t pm1_0;         /*!< µg/m³ */
-	sensors_param_t pm2_5;         /*!< µg/m³ */
-	sensors_param_t pm4_0;         /*!< µg/m³ */
-	sensors_param_t pm10;          /*!< µg/m³ */
-	sensors_param_t voc_index;     /*!< Sensirion VOC index, 1..500, 100 = typical */
-	sensors_param_t nox_index;     /*!< Sensirion NOx index, 1..500, 1 = typical */
-	sensors_param_t aqi;           /*!< ENS160 UBA index, 1..5 */
-	sensors_param_t tvoc_ppb;      /*!< ENS160 total VOC, ppb */
-	sensors_param_t eco2_ppm;      /*!< ENS160 CO2 estimated from VOCs, ppm */
+	const char *name; /*!< snake_case, also usable as a JSON/MQTT key */
+	const char *unit; /*!< ASCII unit, empty for indexes */
+} sensors_qty_info_t;
+
+/**
+ * @brief One sample: the chosen value of every quantity
+ *
+ * Index with sensors_qty_t, e.g. data.qty[SENSORS_CO2]. A quantity stays
+ * invalid when no sensor on this board measures it, or none could this cycle.
+ */
+typedef struct {
+	sensors_param_t qty[SENSORS_QTY_COUNT];
 } sensors_data_t;
+
+#define SENSORS_MAX_READINGS 24 /*!< Enough for every sensor/quantity pair */
+
+/**
+ * @brief One value from one sensor, chosen or not
+ */
+typedef struct {
+	sensors_qty_t qty;
+	float value;
+	const char *src;
+} sensors_reading_t;
+
+/**
+ * @brief Every reading of one cycle, in priority order per quantity
+ */
+typedef struct {
+	size_t count;
+	sensors_reading_t r[SENSORS_MAX_READINGS];
+} sensors_readings_t;
 
 /**
  * @brief Start the periodic sensor task.
@@ -75,6 +112,34 @@ esp_err_t sensors_start(uint32_t period_ms, QueueHandle_t *ret_queue);
  * @return ESP_OK, or ESP_ERR_INVALID_ARG if out of range.
  */
 esp_err_t sensors_set_period(uint32_t period_ms);
+
+/**
+ * @brief Copy the latest sample. Safe to call from any task.
+ *
+ * Unlike the queue, reading this does not consume the sample.
+ *
+ * @param best  Chosen value per quantity, or NULL
+ * @param all   Every reading of the cycle including lower-priority ones, or NULL
+ * @return
+ *     - ESP_OK on success
+ *     - ESP_ERR_INVALID_ARG if both are NULL
+ *     - ESP_ERR_INVALID_STATE if sensors_start() has not run
+ *     - ESP_ERR_NOT_FOUND if no sample has been taken yet
+ */
+esp_err_t sensors_get_latest(sensors_data_t *best, sensors_readings_t *all);
+
+/**
+ * @brief Name and unit of a quantity. Never NULL.
+ */
+const sensors_qty_info_t *sensors_qty_info(sensors_qty_t q);
+
+/**
+ * @brief Whether a sensor enabled in the board config can measure @p q.
+ *
+ * Fixed at build time. A supported quantity can still be invalid in a
+ * sample if its sensors are offline.
+ */
+bool sensors_qty_supported(sensors_qty_t q);
 
 /**
  * @brief Current read period in milliseconds.
