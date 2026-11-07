@@ -23,13 +23,19 @@ static int cmd_show(int argc, char **argv)
 	printf("wifi_ssid  %s\n", cfg.wifi_ssid[0] ? cfg.wifi_ssid : "(not set)");
 	printf("wifi_pass  %s\n", cfg.wifi_pass[0] ? "********" : "(not set)");
 	printf("period     %lu s\n", (unsigned long)(cfg.period_ms / 1000));
+	printf("node_name  %s\n", cfg.node_name);
+	printf("mqtt_uri   %s\n", cfg.mqtt_uri[0] ? cfg.mqtt_uri : "(not set)");
+	printf("mqtt_user  %s\n", cfg.mqtt_user[0] ? cfg.mqtt_user : "(anonymous)");
+	printf("mqtt_pass  %s\n", cfg.mqtt_pass[0] ? "********" : "(not set)");
 	return 0;
 }
 
 static int cmd_set(int argc, char **argv)
 {
 	if (argc != 3) {
-		printf("usage: set <name> <value>   (names: wifi_ssid, wifi_pass, period)\n");
+		printf("usage: set <name> <value>   (\"\" clears a value)\n"
+		       "names: wifi_ssid, wifi_pass, period, node_name, mqtt_uri, mqtt_user, "
+		       "mqtt_pass\n");
 		return 1;
 	}
 
@@ -39,6 +45,14 @@ static int cmd_set(int argc, char **argv)
 		err = settings_set_wifi_ssid(argv[2]);
 	} else if (strcmp(argv[1], "wifi_pass") == 0) {
 		err = settings_set_wifi_pass(argv[2]);
+	} else if (strcmp(argv[1], "node_name") == 0) {
+		err = settings_set_node_name(argv[2]);
+	} else if (strcmp(argv[1], "mqtt_uri") == 0) {
+		err = settings_set_mqtt_uri(argv[2]);
+	} else if (strcmp(argv[1], "mqtt_user") == 0) {
+		err = settings_set_mqtt_user(argv[2]);
+	} else if (strcmp(argv[1], "mqtt_pass") == 0) {
+		err = settings_set_mqtt_pass(argv[2]);
 	} else if (strcmp(argv[1], "period") == 0) {
 		char *end;
 		unsigned long s = strtoul(argv[2], &end, 10);
@@ -61,8 +75,8 @@ static int cmd_set(int argc, char **argv)
 		return 1;
 	}
 	printf("saved\n");
-	if (strncmp(argv[1], "wifi_", 5) == 0)
-		printf("reboot to connect with the new WiFi settings\n");
+	if (strcmp(argv[1], "period") != 0) /* only the period applies right away */
+		printf("reboot to apply\n");
 	return 0;
 }
 
@@ -238,7 +252,7 @@ esp_err_t console_start(void)
 	const esp_console_cmd_t cmds[] = {
 		{ .command = "show", .help = "Show settings", .func = cmd_show },
 		{ .command = "set",
-		  .help = "Save a setting: wifi_ssid, wifi_pass, period (seconds)",
+		  .help = "Save a setting; run 'set' alone for the list. \"\" clears a value",
 		  .hint = "<name> <value>",
 		  .func = cmd_set },
 		{ .command = "sensors",

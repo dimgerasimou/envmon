@@ -14,7 +14,6 @@
 #define CONNECTED_BIT BIT0
 #define RETRY_MIN_MS  1000
 #define RETRY_MAX_MS  60000
-#define HOSTNAME      "envmon" /* becomes envmon-<node_name> in the next step */
 
 static const char *TAG = "net";
 
@@ -90,7 +89,8 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 esp_err_t net_start(void)
 {
-	static settings_t cfg; /* static: ~100 bytes we only need once */
+	static settings_t cfg;                     /* static: ~350 bytes we only need once */
+	char hostname[8 + SETTINGS_NODE_NAME_MAX]; /* "envmon-" + name */
 
 	ESP_RETURN_ON_FALSE(!s_events, ESP_ERR_INVALID_STATE, TAG, "already started");
 	settings_get(&cfg);
@@ -106,7 +106,8 @@ esp_err_t net_start(void)
 	ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif init");
 	s_netif = esp_netif_create_default_wifi_sta();
 	ESP_RETURN_ON_FALSE(s_netif, ESP_FAIL, TAG, "create netif");
-	ESP_RETURN_ON_ERROR(esp_netif_set_hostname(s_netif, HOSTNAME), TAG, "hostname");
+	snprintf(hostname, sizeof(hostname), "envmon-%s", cfg.node_name);
+	ESP_RETURN_ON_ERROR(esp_netif_set_hostname(s_netif, hostname), TAG, "hostname");
 
 	/* WiFi driver */
 	wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -136,7 +137,7 @@ esp_err_t net_start(void)
 	ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wcfg), TAG, "set config");
 	ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start"); /* fires WIFI_EVENT_STA_START */
 
-	ESP_LOGI(TAG, "connecting to \"%s\" as %s", cfg.wifi_ssid, HOSTNAME);
+	ESP_LOGI(TAG, "connecting to \"%s\" as %s", cfg.wifi_ssid, hostname);
 	return ESP_OK;
 }
 
